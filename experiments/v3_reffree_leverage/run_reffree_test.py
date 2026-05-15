@@ -195,7 +195,8 @@ def run_seedtopic(ds_name, cfg, h5ad_path, input_key, output_dir):
     """Run SeedTopic in-process with the specified input."""
     import torch
 
-    seeds = load_seeds(cfg["condition_feat_path"])
+    seeds_path = cfg["condition_feat_path"]
+    seeds = load_seeds(seeds_path)
     idx_to_name = {v["topic_index"]: k for k, v in seeds.items()}
     ct_names = [idx_to_name[i] for i in range(len(seeds))]
 
@@ -214,6 +215,7 @@ def run_seedtopic(ds_name, cfg, h5ad_path, input_key, output_dir):
     try:
         do_exp(
             adata_h5ad_path=str(h5ad_path),
+            condition_feat_path=seeds_path,
             key_input=input_key,
             key_count_out='rna_count',
             key_topic_prior='topic_prior',
