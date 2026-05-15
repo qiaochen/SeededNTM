@@ -22,10 +22,10 @@ echo "Project root: $PROJECT_ROOT"
 echo "Start time: $(date)"
 echo ""
 
-# Run on datasets with available reference (NPC + both CRCs)
+# Run on all datasets with available reference
 # Power sweep: 0.25 (gentle), 0.5 (sqrt), 1.0 (raw)
 $PYTHON experiments/v2_leverage_scores/run_leverage_test.py \
-    --dataset visium_NPC visiumHD_CRC_I visiumHD_CRC_II \
+    --dataset visium_NPC visiumHD_CRC_I visiumHD_CRC_II xenium_BC \
     --power 0.25 0.5 1.0
 
 echo ""

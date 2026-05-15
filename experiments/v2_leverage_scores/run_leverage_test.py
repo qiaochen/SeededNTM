@@ -82,6 +82,32 @@ def compute_signature_matrix(adata_ref, ct_key: str, target_genes) -> np.ndarray
     return signatures, cell_types
 
 
+def load_reference(cfg: dict) -> "sc.AnnData":
+    """Load reference data, handling both h5ad and 10x h5 + xlsx cases."""
+    ref_path = cfg.get("ref_path")
+    if ref_path is not None:
+        logger.info(f"Loading reference h5ad: {ref_path}")
+        return sc.read_h5ad(ref_path)
+
+    ref_h5 = cfg.get("ref_10x_h5_path")
+    ref_xlsx = cfg.get("ref_annotation_xlsx_path")
+    if ref_h5 is not None:
+        logger.info(f"Building reference from 10x h5: {ref_h5}")
+        adata = sc.read_10x_h5(ref_h5)
+        adata.var_names_make_unique()
+        if ref_xlsx is not None:
+            import pandas as pd
+            anno = pd.read_excel(ref_xlsx)
+            anno = anno.set_index("Barcode")
+            anno["Annotation"] = anno["Annotation"].apply(lambda x: x.replace(" ", "_"))
+            adata = adata[adata.obs_names.isin(anno.index.values)]
+            adata.obs["Annotation"] = anno.loc[adata.obs_names, "Annotation"].values
+        sc.pp.filter_cells(adata, min_genes=200)
+        return adata
+
+    return None
+
+
 def prepare_leverage_weighted_input(dataset_name: str, cfg: dict, output_dir: Path,
                                     power: float = 0.5) -> Path:
     """Compute leverage-weighted TF-IDF+PCA and save as new h5ad.
@@ -95,13 +121,10 @@ def prepare_leverage_weighted_input(dataset_name: str, cfg: dict, output_dir: Pa
     logger.info(f"Loading spatial data: {cfg['seedtopic_adata_path']}")
     adata = sc.read_h5ad(cfg["seedtopic_adata_path"])
 
-    ref_path = cfg.get("ref_path")
-    if ref_path is None:
-        logger.warning(f"{dataset_name}: no ref_path, cannot compute leverage scores")
+    adata_ref = load_reference(cfg)
+    if adata_ref is None:
+        logger.warning(f"{dataset_name}: no reference data available")
         return None
-
-    logger.info(f"Loading reference: {ref_path}")
-    adata_ref = sc.read_h5ad(ref_path)
 
     # Compute signature matrix aligned to spatial data genes
     logger.info("Computing per-type signature matrix...")
@@ -219,7 +242,7 @@ def main():
 
     for ds_name in dataset_names:
         cfg = configs[ds_name]
-        if cfg.get("ref_path") is None:
+        if cfg.get("ref_path") is None and cfg.get("ref_10x_h5_path") is None:
             logger.info(f"Skipping {ds_name}: no reference data")
             continue
 
