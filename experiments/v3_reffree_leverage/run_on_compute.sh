@@ -14,7 +14,7 @@
 #SBATCH --time=3:00:00
 #SBATCH --output=experiments/v3_reffree_leverage/slurm_%j.log
 
-set -e
+set +e  # Don't exit on error — let each stage run independently
 
 # Activate the seededntm environment
 eval "$(micromamba shell hook --shell bash)"
@@ -31,17 +31,8 @@ echo "Host: $(hostname)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'none')"
 echo ""
 
-# Run NPC first (small, ~2 min per condition)
-echo "--- Stage 1: visium_NPC (small dataset, quick validation) ---"
-$PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
-    --dataset visium_NPC \
-    --methods none pseudo_sig self_leverage_k seed_specificity \
-    --dim-red pca \
-    --include-ref-based \
-    2>&1 | tee experiments/v3_reffree_leverage/log_npc.txt
-
-echo ""
-echo "--- Stage 2: xenium_BC_leiden (primary test case, ~20 min per condition) ---"
+# Run xenium_BC_leiden FIRST (primary test case)
+echo "--- Stage 1: xenium_BC_leiden (primary test case, ~20 min per condition) ---"
 $PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
     --dataset xenium_BC_leiden \
     --methods none pseudo_sig self_leverage_k seed_specificity \
@@ -49,7 +40,24 @@ $PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
     2>&1 | tee experiments/v3_reffree_leverage/log_xenium.txt
 
 echo ""
-echo "--- Stage 3: CountSketch comparison on NPC ---"
+echo "--- Stage 2: visium_NPC (small dataset, ref-free only) ---"
+$PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
+    --dataset visium_NPC \
+    --methods none pseudo_sig self_leverage_k seed_specificity \
+    --dim-red pca \
+    2>&1 | tee experiments/v3_reffree_leverage/log_npc.txt
+
+echo ""
+echo "--- Stage 3: visium_NPC with ref-based comparison ---"
+$PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
+    --dataset visium_NPC \
+    --methods ref_based \
+    --dim-red pca \
+    --include-ref-based \
+    2>&1 | tee experiments/v3_reffree_leverage/log_npc_refbased.txt
+
+echo ""
+echo "--- Stage 4: CountSketch comparison on NPC ---"
 $PYTHON experiments/v3_reffree_leverage/run_reffree_test.py \
     --dataset visium_NPC \
     --methods pseudo_sig self_leverage_k \
