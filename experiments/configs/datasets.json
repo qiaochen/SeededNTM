@@ -1,0 +1,62 @@
+{
+    "visium_NPC": {
+        "description": "Visium NPC dataset, 1331 spots, 7 cell types",
+        "st_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visium_NPC/STAMP_res/stamp_out.h5ad",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visium_NPC/exp_seeding_ref_scrnaseq/seededntm_adata_seeding_ref_scrnaseq.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visium_NPC/NPC_topic_seeds_ref_scRNAseq.txt",
+        "ref_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visium_NPC/NPC_single_cell_ref_adata.h5ad",
+        "ref_cell_type_key": "Cluster",
+        "ground_label": "cell_type",
+        "num_topics": 7,
+        "reg_topic_prior": 0.9,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": [],
+        "n_spots": 1331,
+        "n_types": 7
+    },
+    "xenium_BC": {
+        "description": "Xenium Breast Cancer, 159226 spots, 19 cell types",
+        "st_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/xenium_breast_cancer/STAMP_res/stamp_out.h5ad",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/xenium_breast_cancer/exp_seeding_ref_scrnaseq/seededntm_adata_seeding_ref_scrnaseq.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/xenium_breast_cancer/bc_topic_seeds_ref_scRNAseq.txt",
+        "ref_path": null,
+        "ref_cell_type_key": "Annotation",
+        "ground_label": "Cluster",
+        "num_topics": 19,
+        "reg_topic_prior": 0.9,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": ["--early_stop"],
+        "n_spots": 159226,
+        "n_types": 19
+    },
+    "visiumHD_CRC_I": {
+        "description": "VisiumHD CRC dataset 1, 2580 spots, 5 GT types from 32-type reference",
+        "st_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/STAMP_res/dataset1_threshod10/stamp_out.h5ad",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset1/exp_seeding_ref_scrnaseq/SeededNTM_1_10_top20markers.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset1/exp_seeding_ref_scrnaseq/topic_seeds_1_10_20.txt",
+        "ref_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/CRC16um/Colon_Cancer/filtered_feature_bc_matrix_CRC_reference.h5ad",
+        "ref_cell_type_key": "Cluster",
+        "ground_label": "DeconvolutionLabel1_name",
+        "num_topics": 5,
+        "reg_topic_prior": 0.99,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": ["--use_nb_obs"],
+        "n_spots": 2580,
+        "n_types": 5
+    },
+    "visiumHD_CRC_II": {
+        "description": "VisiumHD CRC dataset 2, 2275 spots, 6 GT types from 32-type reference",
+        "st_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/STAMP_res/dataset2_threshod10/stamp_out.h5ad",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset2/exp_seeding_ref_scrnaseq/SeededNTM_2_10_top20markers.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset2/exp_seeding_ref_scrnaseq/topic_seeds_2_10_20.txt",
+        "ref_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/CRC16um/Colon_Cancer/filtered_feature_bc_matrix_CRC_reference.h5ad",
+        "ref_cell_type_key": "Cluster",
+        "ground_label": "DeconvolutionLabel1_name",
+        "num_topics": 6,
+        "reg_topic_prior": 0.99,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": ["--use_nb_obs"],
+        "n_spots": 2275,
+        "n_types": 6
+    }
+}
