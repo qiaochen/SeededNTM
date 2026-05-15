@@ -16,7 +16,11 @@
 
 set -e
 
-PYTHON=/illumina-sdcolo-02/scratch/deep_learning/cqiao/software/micromamba/envs/chatdna-prd/seededntm/bin/python3.11
+# Activate the seededntm environment
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate seededntm
+
+PYTHON=python
 PROJECT_DIR=/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeedTopic
 
 cd "$PROJECT_DIR"
