@@ -196,6 +196,28 @@ def prepare_reffree_input(ds_name, cfg, output_dir, method="pseudo_sig",
         rep = compute_countsketch_rep(tfidf, sketch_dim=sketch_dim,
                                       leverage_scores=leverage, seed=42)
         input_key = f"tfidf_sketch_{method}"
+    elif dim_red == "raw_pca":
+        # Ablation: skip TF-IDF, apply weights directly to log-normalized counts
+        from sklearn.decomposition import PCA
+        X = np.asarray(X_counts.toarray() if issparse(X_counts) else X_counts, dtype=np.float32)
+        row_sums = X.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1
+        X_norm = np.log1p(X / row_sums * 1e4)
+        if leverage is not None:
+            X_norm = X_norm * leverage.reshape(1, -1)
+        rep = PCA(n_components=100).fit_transform(X_norm).astype(np.float32)
+        input_key = f"raw_pca_{method}"
+    elif dim_red == "raw_sketch":
+        # Ablation: skip TF-IDF, apply weights + CountSketch on log-normalized counts
+        X = np.asarray(X_counts.toarray() if issparse(X_counts) else X_counts, dtype=np.float32)
+        row_sums = X.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1
+        X_norm = np.log1p(X / row_sums * 1e4)
+        if leverage is not None:
+            X_norm = X_norm * leverage.reshape(1, -1)
+        rep = compute_countsketch_rep(X_norm, sketch_dim=sketch_dim,
+                                      leverage_scores=leverage, seed=42)
+        input_key = f"raw_sketch_{method}"
     else:
         raise ValueError(f"Unknown dim_red: {dim_red}")
 
@@ -276,7 +298,7 @@ def main():
                         default=["none", "pseudo_sig", "self_leverage_k", "seed_specificity"],
                         help="Leverage methods to test")
     parser.add_argument("--dim-red", nargs="+", default=["pca"],
-                        choices=["pca", "sketch"],
+                        choices=["pca", "sketch", "raw_pca", "raw_sketch"],
                         help="Dimensionality reduction method(s)")
     parser.add_argument("--sketch-dim", type=int, default=512)
     parser.add_argument("--include-ref-based", action="store_true",
