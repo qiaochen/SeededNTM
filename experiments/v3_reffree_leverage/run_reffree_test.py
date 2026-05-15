@@ -379,9 +379,11 @@ def main():
                 print(f"{r['dataset']:<18} {r['method']:<18} {r['dim_red']:<7} FAILED")
                 continue
             m = r["metrics"]
+            rt = r['runtime_s']
+            rt_str = f"{rt:>5.0f}s" if isinstance(rt, (int, float)) else f"{rt:>6}"
             print(f"{r['dataset']:<18} {r['method']:<18} {r['dim_red']:<7} "
                   f"{m['f1']:>6.3f} {m['AUPRC']:>7.3f} {m['ARI']:>6.3f} "
-                  f"{m['AMI']:>6.3f} {r['runtime_s']:>5.0f}s")
+                  f"{m['AMI']:>6.3f} {rt_str}")
 
         # Compute deltas relative to no-leverage baseline
         print(f"\n{'='*70}")
