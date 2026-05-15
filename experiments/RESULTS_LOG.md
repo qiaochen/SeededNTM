@@ -23,3 +23,7 @@ Append-only log of all experiment results. Never overwrite existing rows.
 | v1_posthoc_a0.3 | visiumHD_CRC_I | 0.539 | — | — | — | — | 0.511 | — | 0s | post-hoc alpha=0.3, +0.040 ARI, +0.013 F1 |
 | v1_posthoc_a0.3 | visiumHD_CRC_II | 0.277 | — | — | — | — | 0.384 | — | 0s | post-hoc alpha=0.3, +0.017 ARI, +0.006 F1 |
 | v1_posthoc_a0.3 | visium_NPC | 0.518 | — | — | — | — | 0.670 | — | 0s | post-hoc alpha=0.3, -0.022 ARI (hurts small dataset) |
+| v2_leverage_p0.25 | visium_NPC | 0.577 | 0.576 | 0.601 | 0.920 | 0.624 | 0.660 | 0.472 | 96s | +0.030 F1, +0.040 AUPRC, -0.032 ARI |
+| v2_leverage_p0.25 | xenium_BC | 0.619 | — | — | — | 0.761 | 0.571 | 0.659 | — | +0.004 F1, +0.015 ARI (gentle, best for panel data) |
+| v2_leverage_p1.0 | visiumHD_CRC_I | 0.542 | 0.505 | 0.879 | 0.991 | 0.849 | 0.482 | 0.511 | 145s | +0.015 F1, +0.029 AUPRC, +0.011 ARI |
+| v2_leverage_p1.0 | visiumHD_CRC_II | 0.411 | 0.356 | 0.688 | 0.966 | 0.592 | 0.495 | 0.344 | 135s | **+0.140 F1, +0.128 ARI** (major gain) |
