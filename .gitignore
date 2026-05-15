@@ -205,5 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-experiments/*
+
+# Experiment outputs (large result files, not code)
+experiments/*/raw_outputs/
+experiments/*/seedtopic_output/
 experiments/__pycache__/
