@@ -1,0 +1,306 @@
+{
+  "visium_NPC_none_pca": {
+    "dataset": "visium_NPC",
+    "method": "none",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.45224586726813254,
+      "precision": 0.46302628683558117,
+      "recall": 0.46471158460935796,
+      "AUROC": 0.8454817019739929,
+      "AUPRC": 0.45611014790316,
+      "ARI": 0.47094660719466036,
+      "AMI": 0.3782758312049538
+    },
+    "runtime_s": 58.3634774684906,
+    "status": "ok"
+  },
+  "visium_NPC_pseudo_sig_pca": {
+    "dataset": "visium_NPC",
+    "method": "pseudo_sig",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.4764366559068545,
+      "precision": 0.47544324466822807,
+      "recall": 0.5354974775036354,
+      "AUROC": 0.8503495229480406,
+      "AUPRC": 0.46225504936664147,
+      "ARI": 0.5119877743620257,
+      "AMI": 0.39475790259573307
+    },
+    "runtime_s": 47.02942252159119,
+    "status": "ok"
+  },
+  "visium_NPC_self_leverage_k_pca": {
+    "dataset": "visium_NPC",
+    "method": "self_leverage_k",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.4592223424185856,
+      "precision": 0.4672143097842413,
+      "recall": 0.4645534900570926,
+      "AUROC": 0.8352132007049164,
+      "AUPRC": 0.47366566422834716,
+      "ARI": 0.5068982262523128,
+      "AMI": 0.39875462948735785
+    },
+    "runtime_s": 50.427891969680786,
+    "status": "ok"
+  },
+  "visium_NPC_seed_specificity_pca": {
+    "dataset": "visium_NPC",
+    "method": "seed_specificity",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.4681026955004892,
+      "precision": 0.48037079234925895,
+      "recall": 0.5041041265884427,
+      "AUROC": 0.8553127473345941,
+      "AUPRC": 0.4533913209062427,
+      "ARI": 0.4741070086145807,
+      "AMI": 0.3877496625259571
+    },
+    "runtime_s": 55.15675163269043,
+    "status": "ok"
+  },
+  "visium_NPC_ref_based_pca": {
+    "dataset": "visium_NPC",
+    "method": "ref_based",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.46080893069614876,
+      "precision": 0.4808553637037861,
+      "recall": 0.5126681877897129,
+      "AUROC": 0.8457670921436833,
+      "AUPRC": 0.46575086634188784,
+      "ARI": 0.4455433510813936,
+      "AMI": 0.36092519471507806
+    },
+    "runtime_s": 49.829031229019165,
+    "status": "ok"
+  },
+  "xenium_BC_leiden_none_pca": {
+    "dataset": "xenium_BC_leiden",
+    "method": "none",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.40236231433941055,
+      "precision": 0.40911087651053074,
+      "recall": 0.5997945946043984,
+      "AUROC": 0.937733707837583,
+      "AUPRC": 0.5742090356264168,
+      "ARI": 0.3787873083704328,
+      "AMI": 0.5983452247189818
+    },
+    "runtime_s": "recovered",
+    "status": "ok"
+  },
+  "xenium_BC_leiden_pseudo_sig_pca": {
+    "dataset": "xenium_BC_leiden",
+    "method": "pseudo_sig",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.34325964631572764,
+      "precision": 0.3714897381053472,
+      "recall": 0.46861752346375324,
+      "AUROC": 0.92679589680051,
+      "AUPRC": 0.44058135704014284,
+      "ARI": 0.33767227914186015,
+      "AMI": 0.5665355774067911
+    },
+    "runtime_s": "recovered",
+    "status": "ok"
+  },
+  "xenium_BC_leiden_self_leverage_k_pca": {
+    "dataset": "xenium_BC_leiden",
+    "method": "self_leverage_k",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.39954531882041233,
+      "precision": 0.40846697879591254,
+      "recall": 0.5818772278898164,
+      "AUROC": 0.9366510051125478,
+      "AUPRC": 0.5506311351353652,
+      "ARI": 0.36774268304623225,
+      "AMI": 0.5903539435824767
+    },
+    "runtime_s": 1569.6537520885468,
+    "status": "ok"
+  },
+  "xenium_BC_leiden_seed_specificity_pca": {
+    "dataset": "xenium_BC_leiden",
+    "method": "seed_specificity",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.40313523829002107,
+      "precision": 0.4112673215225671,
+      "recall": 0.6020933226529156,
+      "AUROC": 0.9408333264073946,
+      "AUPRC": 0.5762263330031643,
+      "ARI": 0.4018630505464379,
+      "AMI": 0.6059189936084757
+    },
+    "runtime_s": 803.4185683727264,
+    "status": "ok"
+  },
+  "visiumHD_CRC_I_none_pca": {
+    "dataset": "visiumHD_CRC_I",
+    "method": "none",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.517621680394743,
+      "precision": 0.49092706872035075,
+      "recall": 0.847389699647467,
+      "AUROC": 0.987479924886507,
+      "AUPRC": 0.8161000186199752,
+      "ARI": 0.45380578660523985,
+      "AMI": 0.5237681816517139
+    },
+    "runtime_s": 94.53495693206787,
+    "status": "ok"
+  },
+  "visiumHD_CRC_I_pseudo_sig_pca": {
+    "dataset": "visiumHD_CRC_I",
+    "method": "pseudo_sig",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.5556749566757719,
+      "precision": 0.5149997177856995,
+      "recall": 0.8142954313823182,
+      "AUROC": 0.9605688864228071,
+      "AUPRC": 0.8127862485530404,
+      "ARI": 0.577500406403431,
+      "AMI": 0.585562845043417
+    },
+    "runtime_s": 84.97384691238403,
+    "status": "ok"
+  },
+  "visiumHD_CRC_I_self_leverage_k_pca": {
+    "dataset": "visiumHD_CRC_I",
+    "method": "self_leverage_k",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.5383192724360911,
+      "precision": 0.5055087512930738,
+      "recall": 0.8375183360222147,
+      "AUROC": 0.9888745926025331,
+      "AUPRC": 0.8365172249188199,
+      "ARI": 0.48637240689476524,
+      "AMI": 0.5296534010557841
+    },
+    "runtime_s": 85.3006808757782,
+    "status": "ok"
+  },
+  "visiumHD_CRC_I_seed_specificity_pca": {
+    "dataset": "visiumHD_CRC_I",
+    "method": "seed_specificity",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.529749766214495,
+      "precision": 0.5009648946662534,
+      "recall": 0.8450333908173825,
+      "AUROC": 0.9907349605530135,
+      "AUPRC": 0.8237980422141448,
+      "ARI": 0.45875229794493866,
+      "AMI": 0.5132989799792403
+    },
+    "runtime_s": 85.49631476402283,
+    "status": "ok"
+  },
+  "visiumHD_CRC_II_none_pca": {
+    "dataset": "visiumHD_CRC_II",
+    "method": "none",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.27365391683419404,
+      "precision": 0.24880140461981895,
+      "recall": 0.5287140712284403,
+      "AUROC": 0.9714342975935675,
+      "AUPRC": 0.5766993102658431,
+      "ARI": 0.35499890531340994,
+      "AMI": 0.24126895211092922
+    },
+    "runtime_s": 79.87129735946655,
+    "status": "ok"
+  },
+  "visiumHD_CRC_II_pseudo_sig_pca": {
+    "dataset": "visiumHD_CRC_II",
+    "method": "pseudo_sig",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.32015185739015267,
+      "precision": 0.3015869746052673,
+      "recall": 0.6164509994309516,
+      "AUROC": 0.9822552237801676,
+      "AUPRC": 0.6074434488466802,
+      "ARI": 0.3925380740584447,
+      "AMI": 0.27781551284781214
+    },
+    "runtime_s": 78.93696475028992,
+    "status": "ok"
+  },
+  "visiumHD_CRC_II_self_leverage_k_pca": {
+    "dataset": "visiumHD_CRC_II",
+    "method": "self_leverage_k",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.3724391176449407,
+      "precision": 0.330216604971678,
+      "recall": 0.667232471440045,
+      "AUROC": 0.9636975756369806,
+      "AUPRC": 0.6221021508307866,
+      "ARI": 0.4316549931718237,
+      "AMI": 0.3043860931847076
+    },
+    "runtime_s": 79.29301381111145,
+    "status": "ok"
+  },
+  "visiumHD_CRC_II_seed_specificity_pca": {
+    "dataset": "visiumHD_CRC_II",
+    "method": "seed_specificity",
+    "dim_red": "pca",
+    "metrics": {
+      "f1": 0.3948036479284083,
+      "precision": 0.3553567774886524,
+      "recall": 0.6971622049682166,
+      "AUROC": 0.9828956678530275,
+      "AUPRC": 0.6516683003648326,
+      "ARI": 0.4489827815704067,
+      "AMI": 0.316830787764887
+    },
+    "runtime_s": 79.41714215278625,
+    "status": "ok"
+  },
+  "visium_NPC_pseudo_sig_sketch": {
+    "dataset": "visium_NPC",
+    "method": "pseudo_sig",
+    "dim_red": "sketch",
+    "metrics": {
+      "f1": 0.474204486264942,
+      "precision": 0.47005662574235046,
+      "recall": 0.5390487688717951,
+      "AUROC": 0.8581804067810671,
+      "AUPRC": 0.4900573697286888,
+      "ARI": 0.4377357513112806,
+      "AMI": 0.40518036401272717
+    },
+    "runtime_s": 57.18686771392822,
+    "status": "ok"
+  },
+  "visium_NPC_self_leverage_k_sketch": {
+    "dataset": "visium_NPC",
+    "method": "self_leverage_k",
+    "dim_red": "sketch",
+    "metrics": {
+      "f1": 0.4579190993622891,
+      "precision": 0.45364795679557357,
+      "recall": 0.509368514917053,
+      "AUROC": 0.8450709012515268,
+      "AUPRC": 0.4767545831950751,
+      "ARI": 0.42473419379976574,
+      "AMI": 0.3691389477901604
+    },
+    "runtime_s": 51.11179733276367,
+    "status": "ok"
+  }
+}
