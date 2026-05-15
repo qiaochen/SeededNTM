@@ -16,7 +16,10 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_DIR"
 
 PYTHON="/illumina-sdcolo-02/scratch/deep_learning/cqiao/software/micromamba/envs/chatdna-prd/seededntm/bin/python3.11"
-SEEDEDNTM="/illumina-sdcolo-02/scratch/deep_learning/cqiao/software/micromamba/envs/chatdna-prd/seededntm/bin/infer_seededntm"
+
+run_seedtopic() {
+    $PYTHON -c "import sys; sys.argv = sys.argv[1:]; from seededntm.main import main; main()" "infer_seededntm" "$@"
+}
 
 export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
@@ -37,7 +40,7 @@ for LAMBDA in 0.001 0.01 0.05 0.1; do
     OUTDIR="$OUTBASE/npc_lambda_${LAMBDA}"
     mkdir -p "$OUTDIR"
     
-    $SEEDEDNTM \
+    run_seedtopic \
         --adata_h5ad_path "$ADATA" \
         --condition_feat_path "$SEEDS" \
         --key_input tfidf_pca \
