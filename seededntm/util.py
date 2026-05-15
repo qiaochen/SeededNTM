@@ -244,3 +244,207 @@ def compute_countsketch_rep(X, sketch_dim=512, leverage_scores=None, seed=0):
         X_sketch = X @ Omega.toarray()
 
     return X_sketch.astype(np.float32)
+
+
+def compute_reffree_leverage(
+    X_counts,
+    seeds_dict,
+    var_names,
+    method="pseudo_sig",
+    n_topics=None,
+    temperature=0.8,
+    regularization=1e-6,
+):
+    """Compute reference-free gene weights using only seed genes and ST data.
+
+    Three strategies available:
+    - "pseudo_sig": Build pseudo-signature matrix from seed-guided topic_prior,
+      then compute leverage via SVD (recommended).
+    - "self_leverage_k": SVD of TF-IDF with top-K components (K=num_topics),
+      extracting cell-type-scale structure.
+    - "seed_specificity": Upweight genes that are specific markers (appear in
+      fewer cell types).
+
+    All methods return weights in the same format as compute_leverage_scores():
+    clipped to [0.1, 10.0], mean ~1.0.
+
+    Args:
+        X_counts: (N, G) raw count matrix (sparse or dense).
+        seeds_dict: dict with structure {"CellType": {"features": [...], "topic_index": int}}.
+        var_names: (G,) gene names matching columns of X_counts.
+        method: one of "pseudo_sig", "self_leverage_k", "seed_specificity".
+        n_topics: number of topics. Inferred from seeds_dict if None.
+        temperature: softmax temperature for topic_prior computation.
+        regularization: numerical stability constant.
+
+    Returns:
+        (G,) array of gene weights, clipped to [0.1, 10.0], mean ~1.0.
+    """
+    G = X_counts.shape[1]
+    var_names = np.asarray(var_names)
+
+    if n_topics is None:
+        n_topics = len(seeds_dict)
+
+    if method == "pseudo_sig":
+        return _reffree_pseudo_sig(
+            X_counts, seeds_dict, var_names, n_topics, temperature, regularization
+        )
+    elif method == "self_leverage_k":
+        return _reffree_self_leverage_k(
+            X_counts, n_topics, regularization
+        )
+    elif method == "seed_specificity":
+        return _reffree_seed_specificity(
+            seeds_dict, var_names, G, regularization
+        )
+    else:
+        raise ValueError(f"Unknown method: {method}. Use pseudo_sig, self_leverage_k, or seed_specificity.")
+
+
+def _reffree_pseudo_sig(X_counts, seeds_dict, var_names, n_topics, temperature, reg):
+    """Approach 1: Seed-guided pseudo-signatures from ST data."""
+    from scipy.special import softmax as sp_softmax
+
+    N, G = X_counts.shape
+    X = X_counts
+    if issparse(X):
+        X = X.toarray()
+    X = np.asarray(X, dtype=np.float64)
+
+    # Recompute topic_prior from seeds (don't rely on stored value)
+    var_list = list(var_names)
+    var_set = set(var_list)
+    var_to_idx = {g: i for i, g in enumerate(var_list)}
+
+    scores = np.zeros((N, n_topics), dtype=np.float64)
+    seed_gene_indices = set()
+
+    for ct_name, record in seeds_dict.items():
+        topic_idx = record["topic_index"]
+        feats = [g for g in record["features"] if g in var_set]
+        if len(feats) == 0:
+            continue
+        feat_idx = [var_to_idx[g] for g in feats]
+        seed_gene_indices.update(feat_idx)
+        scores[:, topic_idx] = X[:, feat_idx].sum(axis=1) / len(feats)
+
+    topic_prior = sp_softmax(scores / temperature, axis=1)
+
+    # Normalize counts (CPM + log1p) before computing pseudo-signatures
+    row_sums = X.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    X_norm = np.log1p(X / row_sums * 1e4)
+
+    # Weighted mean per topic: pseudo_sig (K, G)
+    denom = topic_prior.sum(axis=0, keepdims=True).T  # (K, 1)
+    denom[denom == 0] = 1
+    pseudo_sig = (topic_prior.T @ X_norm) / denom  # (K, G)
+
+    # Circularity mitigation: zero out seed gene columns
+    seed_idx_array = np.array(sorted(seed_gene_indices))
+    if len(seed_idx_array) > 0:
+        pseudo_sig[:, seed_idx_array] = 0.0
+
+    # Compute leverage via SVD (same as compute_leverage_scores but inline to
+    # avoid the transpose heuristic bug when K < G is already guaranteed)
+    X_centered = pseudo_sig - pseudo_sig.mean(axis=0, keepdims=True)
+    n_components = min(X_centered.shape[0], X_centered.shape[1], 30)
+
+    from numpy.linalg import svd
+    try:
+        U, s, Vt = svd(X_centered, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return np.ones(G, dtype=np.float32)
+
+    V = Vt[:n_components, :].T  # (G, n_components)
+    s = s[:n_components]
+
+    s_sq = s ** 2
+    weights = s_sq / (s_sq + reg)
+    leverage = np.sum((V ** 2) * weights, axis=1)  # (G,)
+
+    # FlashDeconv-style normalization
+    leverage = leverage / (leverage.sum() + reg)
+    gene_weights = np.sqrt(leverage * G + reg)
+    gene_weights = gene_weights / (gene_weights.mean() + reg)
+    gene_weights = np.clip(gene_weights, 0.1, 10.0)
+
+    return gene_weights.astype(np.float32)
+
+
+def _reffree_self_leverage_k(X_counts, n_topics, reg):
+    """Approach 2a: Self-leverage from top-K SVD of TF-IDF."""
+    N, G = X_counts.shape
+
+    # Compute TF-IDF (no PCA, no gene weights)
+    if issparse(X_counts):
+        idf = np.log(N / (np.asarray((X_counts > 0).sum(axis=0)).ravel() + 1))
+        row_sums = np.asarray(X_counts.sum(axis=1)).ravel()
+        row_sums[row_sums == 0] = 1
+        from scipy.sparse import diags as sp_diags
+        tf = X_counts.multiply(1.0 / row_sums[:, np.newaxis])
+        tfidf = tf.multiply(idf).toarray()
+    else:
+        X = np.asarray(X_counts, dtype=np.float64)
+        idf = np.log(N / (np.sum(X > 0, axis=0) + 1))
+        row_sums = X.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1
+        tfidf = (X / row_sums) * idf
+
+    # Top-K SVD (K = num_topics): captures cell-type-scale structure
+    from numpy.linalg import svd
+    # For efficiency on large matrices, use randomized SVD
+    n_components = min(n_topics, G, N)
+    try:
+        from sklearn.utils.extmath import randomized_svd
+        U, s, Vt = randomized_svd(tfidf, n_components=n_components, random_state=42)
+    except Exception:
+        U, s, Vt = svd(tfidf, full_matrices=False)
+        U, s, Vt = U[:, :n_components], s[:n_components], Vt[:n_components, :]
+
+    V = Vt.T  # (G, K)
+
+    # Leverage from K-dimensional subspace
+    s_sq = s ** 2
+    weights = s_sq / (s_sq + reg)
+    leverage = np.sum((V ** 2) * weights, axis=1)  # (G,)
+
+    # FlashDeconv-style normalization
+    leverage = leverage / (leverage.sum() + reg)
+    gene_weights = np.sqrt(leverage * G + reg)
+    gene_weights = gene_weights / (gene_weights.mean() + reg)
+    gene_weights = np.clip(gene_weights, 0.1, 10.0)
+
+    return gene_weights.astype(np.float32)
+
+
+def _reffree_seed_specificity(seeds_dict, var_names, G, reg):
+    """Approach 3: Gene weighting by seed marker specificity."""
+    var_list = list(var_names)
+    var_set = set(var_list)
+    var_to_idx = {g: i for i, g in enumerate(var_list)}
+
+    # Count how many cell types each gene appears in as a marker
+    gene_type_count = np.zeros(G, dtype=np.float64)
+    gene_is_seed = np.zeros(G, dtype=bool)
+
+    for ct_name, record in seeds_dict.items():
+        feats = [g for g in record["features"] if g in var_set]
+        for g in feats:
+            idx = var_to_idx[g]
+            gene_type_count[idx] += 1
+            gene_is_seed[idx] = True
+
+    # Weight: more specific markers (fewer types) get higher weight
+    # w = 1 + alpha / n_types_sharing for seeds, 1.0 for non-seeds
+    alpha = 2.0  # tunable scaling factor
+    gene_weights = np.ones(G, dtype=np.float64)
+    mask = gene_is_seed
+    gene_weights[mask] = 1.0 + alpha / gene_type_count[mask]
+
+    # Normalize mean to 1.0 and clip
+    gene_weights = gene_weights / (gene_weights.mean() + reg)
+    gene_weights = np.clip(gene_weights, 0.1, 10.0)
+
+    return gene_weights.astype(np.float32)
