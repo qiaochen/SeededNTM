@@ -45,6 +45,8 @@ def do_exp(
         scale_normal_feat: float=0.0,
         wt_fusion_top_seed: float=0.5,
         reg_topic_prior: float=0.5,
+        spatial_reg_lambda: float=0.0,
+        spatial_k_neighbors: int=6,
         seed: int=0,
         condition_feat_path: str=None,
         use_nb_obs: bool=False,
@@ -85,6 +87,16 @@ def do_exp(
         topic_prior = topic_prior,
     )
     
+    # Build spatial graph if spatial regularization is requested
+    if spatial_reg_lambda > 0 and 'spatial' in adata.obsm:
+        from .util import build_spatial_graph
+        coords = adata.obsm['spatial']
+        logger.info(f'Building spatial k-NN graph (k={spatial_k_neighbors}) from {coords.shape[0]} spots')
+        exp_data.spatial_adj = build_spatial_graph(coords, k_neighbors=spatial_k_neighbors)
+    elif spatial_reg_lambda > 0:
+        logger.warning('spatial_reg_lambda > 0 but no spatial coordinates found in adata.obsm["spatial"]. Disabling spatial reg.')
+        spatial_reg_lambda = 0.0
+    
     logger.info("Model fitting start ...")
     model, df_topic, df_top_vocab, losses = do_experiment(
                 exp_data=exp_data,
@@ -102,6 +114,7 @@ def do_exp(
                 scale_normal_feat=scale_normal_feat,
                 wt_fusion_top_seed=wt_fusion_top_seed,
                 reg_topic_prior=reg_topic_prior,
+                spatial_reg_lambda=spatial_reg_lambda,
                 use_nb_obs=use_nb_obs,
                 is_group_mode=is_group_mode,
                 pos_scale=pos_scale,
@@ -142,6 +155,8 @@ def main():
     parser.add_argument('--early_stop', action=argparse.BooleanOptionalAction)
     parser.add_argument('--early_stop_tolerance', type=int, default=20, help='Tolerance steps of early stop during training, if early_stop is turned on, default: 20')
     parser.add_argument('--early_stop_minimum_steps', type=int, default=100, help='Minimum number of steps before turning on early stop during training, if early_stop is turned on, default: 100')
+    parser.add_argument('--spatial_reg_lambda', type=float, default=0.0, help='Spatial graph Laplacian regularization strength. 0 disables. Suggested range: 0.001-0.1. default: 0.0')
+    parser.add_argument('--spatial_k_neighbors', type=int, default=6, help='Number of nearest neighbors for spatial graph. default: 6')
     
     args = parser.parse_args()
     logger.info(f"Input parameters: {args}")
@@ -177,6 +192,8 @@ def main():
         use_nb_obs= not args.use_multinomial_obs,
         is_group_mode = args.is_group_mode,
         pos_scale = args.scale_binary_mode_positive,
+        spatial_reg_lambda=args.spatial_reg_lambda,
+        spatial_k_neighbors=args.spatial_k_neighbors,
         device=torch.device(args.device) if not args.device == 'auto' else (torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu'))
     )
     

@@ -17,6 +17,7 @@ class ExpData:
     obs_names: Union[np.array, list, pd.Series, pd.Index, None]=None
     condition_mask: Union[np.array, list, None]=None
     topic_prior: Union[np.array, list, None]=None
+    spatial_adj: Union[sparray, spmatrix, None]=None
 
 class MyDataset(Dataset):
     def __init__(self,

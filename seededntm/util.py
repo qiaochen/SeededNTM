@@ -6,6 +6,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix, diags, identity, issparse
 from scipy.special import softmax
 from sklearn.decomposition import PCA
+from sklearn.neighbors import kneighbors_graph
 
 
 def aggregate_mean(data):
@@ -68,3 +69,19 @@ def compute_topic_prior(adata, marker_genes, temperature=0.8):
         
     qusi_topics = softmax(np.hstack(qusi_topics)/temperature, axis=1).round(4)
     return qusi_topics
+
+
+def build_spatial_graph(coords, k_neighbors=6, mode='connectivity'):
+    """Build a symmetric k-NN spatial adjacency matrix.
+
+    Args:
+        coords: (N, 2) array of spatial coordinates.
+        k_neighbors: number of nearest neighbors (default 6 for hex grids).
+        mode: 'connectivity' (binary) or 'distance' (weighted).
+
+    Returns:
+        Sparse CSR adjacency matrix (N, N), symmetrized.
+    """
+    A = kneighbors_graph(coords, n_neighbors=k_neighbors, mode=mode, include_self=False)
+    A = ((A + A.T) > 0).astype(np.float32)
+    return csr_matrix(A)

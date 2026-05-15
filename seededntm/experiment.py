@@ -130,6 +130,7 @@ def preprocess_ST(adata,
         obs_names=obs_names,
         condition_mask=condition_mask,
         topic_prior=topic_prior,
+        spatial_adj=None,
     ) 
     return exp_data
   
@@ -150,6 +151,7 @@ def do_experiment(
         scale_normal_feat: float=-1,
         wt_fusion_top_seed: float=0.5,
         reg_topic_prior: float=0.5,
+        spatial_reg_lambda: float=0.0,
         n_workers: int=4,
         use_nb_obs: bool=True,
         is_group_mode: bool=False,
@@ -252,6 +254,25 @@ def do_experiment(
     es = EarlyStopper(early_stop_tolerance)
     min_epochs = early_stop_miniepochs
     
+    # Prepare spatial regularization if enabled
+    spatial_adj_torch = None
+    if spatial_reg_lambda > 0 and exp_data.spatial_adj is not None:
+        from scipy.sparse import coo_matrix
+        adj_coo = coo_matrix(exp_data.spatial_adj)
+        spatial_adj_torch = torch.sparse_coo_tensor(
+            torch.LongTensor(np.vstack([adj_coo.row, adj_coo.col])),
+            torch.FloatTensor(adj_coo.data),
+            adj_coo.shape,
+        ).to(device)
+        logger.info(f"Spatial regularization enabled: lambda={spatial_reg_lambda}, "
+                    f"edges={adj_coo.nnz}, avg_degree={adj_coo.nnz / adj_coo.shape[0]:.1f}")
+    
+    # Full input tensor for spatial reg (all spots)
+    full_input = torch.FloatTensor(exp_data.input_rep).to(device) if spatial_adj_torch is not None else None
+    full_batch_labels = None
+    if spatial_adj_torch is not None and exp_data.batch_labels is not None:
+        full_batch_labels = torch.LongTensor(exp_data.batch_labels).to(device)
+    
     for epoch in p_bar:
         loss_dict = train_step(
             train_loader, 
@@ -266,6 +287,31 @@ def do_experiment(
         if isinstance(loss_dict, tuple):
             logging.error('training error')
             raise Exception('training error')
+        
+        # Spatial regularization step (every epoch, full-batch)
+        if spatial_adj_torch is not None and spatial_reg_lambda > 0:
+            model.train()
+            adam.zero_grad()
+            with torch.no_grad():
+                theta = torch.softmax(
+                    model.encoder(full_input, full_batch_labels)[0], dim=-1
+                )
+            theta_for_grad = model.encoder(full_input, full_batch_labels)[0]
+            theta_soft = torch.softmax(theta_for_grad, dim=-1)
+            
+            # Graph Laplacian smoothness: sum_ij A_ij * ||theta_i - theta_j||^2
+            # Efficient: Tr(theta^T L theta) = Tr(theta^T D theta) - Tr(theta^T A theta)
+            # = sum_i d_i * ||theta_i||^2 - sum_ij A_ij * theta_i . theta_j
+            Atheta = torch.sparse.mm(spatial_adj_torch, theta_soft)  # (N, K)
+            smooth_loss = (theta_soft * (theta_soft * spatial_adj_torch.sum(dim=1).to_dense().unsqueeze(1) - Atheta)).sum()
+            smooth_loss = spatial_reg_lambda * smooth_loss / theta_soft.shape[0]
+            
+            smooth_loss.backward()
+            torch.nn.utils.clip_grad_norm_(params, clip_norm)
+            adam.step()
+            adam.zero_grad()
+            
+            loss_dict['spatial'] = smooth_loss.item()
         
         loss_info = "  ".join([f"{k}({v:.4f})" for k,v in loss_dict.items()])
         
