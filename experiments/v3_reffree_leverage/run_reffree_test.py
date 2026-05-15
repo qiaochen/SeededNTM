@@ -331,19 +331,25 @@ def main():
                     "status": "ok",
                 }
 
-    # Save results
+    # Save results (merge with existing)
     if results:
         out_path = Path(__file__).parent / "reffree_results.json"
+        existing = {}
+        if out_path.exists():
+            with open(out_path) as f:
+                existing = json.load(f)
+        existing.update(results)
         with open(out_path, "w") as f:
-            json.dump(results, f, indent=2, default=str)
+            json.dump(existing, f, indent=2, default=str)
         print(f"\nSaved results: {out_path}")
 
-        # Summary table
+        # Summary table (show all results including previously saved)
+        all_results = existing
         print(f"\n{'='*90}")
         print(f"{'Dataset':<18} {'Method':<18} {'DimRed':<7} "
               f"{'F1':>6} {'AUPRC':>7} {'ARI':>6} {'AMI':>6} {'Time':>6}")
         print(f"{'-'*90}")
-        for key, r in results.items():
+        for key, r in all_results.items():
             if r.get("status") != "ok":
                 print(f"{r['dataset']:<18} {r['method']:<18} {r['dim_red']:<7} FAILED")
                 continue
@@ -357,13 +363,13 @@ def main():
         print("Deltas relative to no-leverage baseline:")
         print(f"{'Dataset':<18} {'Method':<18} {'DimRed':<7} {'dARI':>7} {'dAUPRC':>7} {'dF1':>7}")
         print(f"{'-'*70}")
-        for ds_name in dataset_names:
-            baseline_key = f"{ds_name}_none_pca"
-            if baseline_key not in results or results[baseline_key].get("status") != "ok":
+        for ds in set(r["dataset"] for r in all_results.values()):
+            baseline_key = f"{ds}_none_pca"
+            if baseline_key not in all_results or all_results[baseline_key].get("status") != "ok":
                 continue
-            bl = results[baseline_key]["metrics"]
-            for key, r in results.items():
-                if not key.startswith(ds_name) or r.get("status") != "ok":
+            bl = all_results[baseline_key]["metrics"]
+            for key, r in all_results.items():
+                if not key.startswith(ds) or r.get("status") != "ok":
                     continue
                 if key == baseline_key:
                     continue
