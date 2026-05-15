@@ -18,3 +18,8 @@ Append-only log of all experiment results. Never overwrite existing rows.
 
 | Version | Dataset | F1 | Prec | Recall | AUROC | AUPRC | ARI | AMI | Runtime | Notes |
 |---------|---------|-----|------|--------|-------|-------|-----|-----|---------|-------|
+| v1_spatial_train | visium_NPC | 0.530 | — | — | — | 0.569 | 0.682 | 0.477 | — | best of lambda sweep (0.1), -0.010 ARI |
+| v1_posthoc_a0.3 | xenium_BC | 0.627 | — | — | — | 0.760 | 0.578 | 0.661 | 0s | post-hoc alpha=0.3, +0.022 ARI, +0.013 F1 |
+| v1_posthoc_a0.3 | visiumHD_CRC_I | 0.539 | — | — | — | — | 0.511 | — | 0s | post-hoc alpha=0.3, +0.040 ARI, +0.013 F1 |
+| v1_posthoc_a0.3 | visiumHD_CRC_II | 0.277 | — | — | — | — | 0.384 | — | 0s | post-hoc alpha=0.3, +0.017 ARI, +0.006 F1 |
+| v1_posthoc_a0.3 | visium_NPC | 0.518 | — | — | — | — | 0.670 | — | 0s | post-hoc alpha=0.3, -0.022 ARI (hurts small dataset) |
