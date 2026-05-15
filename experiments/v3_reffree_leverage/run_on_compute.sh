@@ -70,7 +70,14 @@ python experiments/v3_reffree_leverage/run_reffree_test.py \
     --dim-red pca
 
 echo ""
-echo "--- Stage 2: CountSketch comparison on NPC ---"
+echo "--- Stage 2: CRC_I and CRC_II (small, ~2 min per condition each) ---"
+python experiments/v3_reffree_leverage/run_reffree_test.py \
+    --dataset visiumHD_CRC_I visiumHD_CRC_II \
+    --methods none pseudo_sig self_leverage_k seed_specificity \
+    --dim-red pca
+
+echo ""
+echo "--- Stage 3: CountSketch comparison on NPC ---"
 python experiments/v3_reffree_leverage/run_reffree_test.py \
     --dataset visium_NPC \
     --methods pseudo_sig self_leverage_k \

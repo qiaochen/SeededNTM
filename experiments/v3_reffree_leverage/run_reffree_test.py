@@ -74,6 +74,32 @@ REFFREE_DATASETS = {
         "extra_args": [],
         "has_reference": True,
     },
+    "visiumHD_CRC_I": {
+        "description": "VisiumHD CRC dataset 1, 2580 spots, 5 GT types",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset1/exp_seeding_ref_scrnaseq/SeededNTM_1_10_top20markers.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset1/exp_seeding_ref_scrnaseq/topic_seeds_1_10_20.txt",
+        "ref_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/CRC16um/Colon_Cancer/filtered_feature_bc_matrix_CRC_reference.h5ad",
+        "ref_cell_type_key": "Cluster",
+        "ground_label": "DeconvolutionLabel1_name",
+        "num_topics": 5,
+        "reg_topic_prior": 0.99,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": ["--use_nb_obs"],
+        "has_reference": True,
+    },
+    "visiumHD_CRC_II": {
+        "description": "VisiumHD CRC dataset 2, 2275 spots, 6 GT types",
+        "seedtopic_adata_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset2/exp_seeding_ref_scrnaseq/SeededNTM_2_10_top20markers.h5ad",
+        "condition_feat_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/dataset2/exp_seeding_ref_scrnaseq/topic_seeds_2_10_20.txt",
+        "ref_path": "/illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeededNTM/experiments/visiumHD_CRC/CRC16um/Colon_Cancer/filtered_feature_bc_matrix_CRC_reference.h5ad",
+        "ref_cell_type_key": "Cluster",
+        "ground_label": "DeconvolutionLabel1_name",
+        "num_topics": 6,
+        "reg_topic_prior": 0.99,
+        "wt_fusion_top_seed": 1.0,
+        "extra_args": ["--use_nb_obs"],
+        "has_reference": True,
+    },
 }
 
 
@@ -113,8 +139,8 @@ def compute_signature_matrix(adata_ref, ct_key: str, target_genes) -> np.ndarray
 
 def load_reference_for_dataset(ds_name, cfg):
     """Load reference and compute leverage for comparison."""
-    if ds_name == "visium_NPC":
-        ref_path = cfg["ref_path"]
+    ref_path = cfg.get("ref_path")
+    if ref_path is not None:
         logger.info(f"Loading reference h5ad: {ref_path}")
         return sc.read_h5ad(ref_path), cfg["ref_cell_type_key"]
     elif ds_name == "xenium_BC_leiden":
@@ -309,9 +335,8 @@ def main():
                     }
                     continue
 
-                gt_labels = load_ground_truth(
-                    "xenium_BC" if "xenium" in ds_name else ds_name
-                )
+                gt_ds_name = ds_name.replace("_leiden", "")
+                gt_labels = load_ground_truth(gt_ds_name)
                 n = min(len(gt_labels), proportions.shape[0])
                 metrics = compute_metrics(proportions[:n], ct_names, gt_labels[:n])
 
