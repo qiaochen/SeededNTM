@@ -8,6 +8,7 @@
 #   Raw counts + CountSketch (ablate both)
 #
 # For each: none (no weights) + seed_specificity + pseudo_sig
+# Runs 4 datasets in parallel.
 #
 # Usage (on compute node):
 #   cd /illumina-sdcolo-02/scratch/deep_learning/cqiao/projects/SeedTopic
@@ -25,27 +26,42 @@ echo "Date: $(date)"
 echo "Host: $(hostname)"
 echo ""
 
-# CRC datasets first (small, fast)
-echo "--- CRC_I + CRC_II: all preprocessing combos ---"
+# Run all 4 datasets in parallel
 python experiments/v3_reffree_leverage/run_reffree_test.py \
-    --dataset visiumHD_CRC_I visiumHD_CRC_II \
+    --dataset visiumHD_CRC_I \
     --methods none seed_specificity pseudo_sig \
-    --dim-red sketch raw_pca raw_sketch
+    --dim-red sketch raw_pca raw_sketch \
+    2>&1 | tee experiments/v3_reffree_leverage/log_ablation_crc1.txt &
+PID1=$!
 
-echo ""
-echo "--- NPC: all preprocessing combos ---"
+python experiments/v3_reffree_leverage/run_reffree_test.py \
+    --dataset visiumHD_CRC_II \
+    --methods none seed_specificity pseudo_sig \
+    --dim-red sketch raw_pca raw_sketch \
+    2>&1 | tee experiments/v3_reffree_leverage/log_ablation_crc2.txt &
+PID2=$!
+
 python experiments/v3_reffree_leverage/run_reffree_test.py \
     --dataset visium_NPC \
     --methods none seed_specificity pseudo_sig \
-    --dim-red raw_pca raw_sketch
+    --dim-red raw_pca raw_sketch \
+    2>&1 | tee experiments/v3_reffree_leverage/log_ablation_npc.txt &
+PID3=$!
 
-echo ""
-echo "--- Xenium BC: all preprocessing combos ---"
 python experiments/v3_reffree_leverage/run_reffree_test.py \
     --dataset xenium_BC_leiden \
     --methods none seed_specificity pseudo_sig \
-    --dim-red sketch raw_pca raw_sketch
+    --dim-red sketch raw_pca raw_sketch \
+    2>&1 | tee experiments/v3_reffree_leverage/log_ablation_xenium.txt &
+PID4=$!
+
+echo "Launched 4 parallel jobs: $PID1 $PID2 $PID3 $PID4"
+wait $PID1; echo "CRC_I done (exit $?)"
+wait $PID2; echo "CRC_II done (exit $?)"
+wait $PID3; echo "NPC done (exit $?)"
+wait $PID4; echo "Xenium done (exit $?)"
 
 echo ""
 echo "=== Ablation complete ==="
+echo "Results:"
 cat experiments/v3_reffree_leverage/reffree_results.json

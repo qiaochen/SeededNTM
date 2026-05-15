@@ -378,16 +378,20 @@ def main():
                     "status": "ok",
                 }
 
-    # Save results (merge with existing)
+    # Save results (merge with existing, with file lock for parallel safety)
     if results:
         out_path = Path(__file__).parent / "reffree_results.json"
-        existing = {}
-        if out_path.exists():
-            with open(out_path) as f:
-                existing = json.load(f)
-        existing.update(results)
-        with open(out_path, "w") as f:
+        import fcntl
+        with open(out_path, "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            content = f.read()
+            existing = json.loads(content) if content.strip() else {}
+            existing.update(results)
+            f.seek(0)
+            f.truncate()
             json.dump(existing, f, indent=2, default=str)
+            fcntl.flock(f, fcntl.LOCK_UN)
         print(f"\nSaved results: {out_path}")
 
         # Summary table (show all results including previously saved)
