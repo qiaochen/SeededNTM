@@ -113,6 +113,7 @@ def preprocess_ST(adata,
                 feat_list = record['features']
                 assert(adata.var_names.isin(feat_list).sum() == len(feat_list))
                 condition_mask[record['topic_index'], adata.var_names.isin(feat_list)] = True
+        logger.info(f'Condition mask created: shape={condition_mask.shape}, nonzero={condition_mask.sum()}')
     
     if key_obs_batch_label is None:
         batch_labels = None

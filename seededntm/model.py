@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")
 
 torch.autograd.set_detect_anomaly(False)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
@@ -1011,9 +1011,12 @@ class SeededNTM(nn.Module):
         adjust = torch.log(bg + pseudocount) - torch.log(bg)
         beta = beta - adjust
         
-        top_dist_seed = torch.softmax(beta[0].masked_fill(self.condition_mask == 0, float('-inf')), dim=-1)
-        top_dist_bg   = torch.softmax(beta[1], dim=-1)
-        top_dist = self.wt_fusion_top_seed * top_dist_seed + (1 - self.wt_fusion_top_seed) * top_dist_bg
+        if self.condition_mask is not None and self.wt_fusion_top_seed > 0:
+            top_dist_seed = torch.softmax(beta[0].masked_fill(self.condition_mask == 0, float('-inf')), dim=-1)
+            top_dist_bg   = torch.softmax(beta[1], dim=-1)
+            top_dist = self.wt_fusion_top_seed * top_dist_seed + (1 - self.wt_fusion_top_seed) * top_dist_bg
+        else:
+            top_dist = torch.softmax(beta[0], dim=-1)
         return top_dist.cpu()
     
     def beta_normal(self, pseudocount=0.1):
@@ -1054,9 +1057,12 @@ class SeededNTM(nn.Module):
         adjust = torch.log(bg + pseudocount) - torch.log(bg)
         beta = beta - adjust
         
-        top_dist_seed = beta[0].masked_fill(self.condition_mask == 0, 0)
-        top_dist_bg   = beta[1]
-        top_dist = self.wt_fusion_top_seed * top_dist_seed + (1 - self.wt_fusion_top_seed) * top_dist_bg
+        if self.condition_mask is not None and self.wt_fusion_top_seed > 0:
+            top_dist_seed = beta[0].masked_fill(self.condition_mask == 0, 0)
+            top_dist_bg   = beta[1]
+            top_dist = self.wt_fusion_top_seed * top_dist_seed + (1 - self.wt_fusion_top_seed) * top_dist_bg
+        else:
+            top_dist = beta[0]
         
         return top_dist.cpu()
 

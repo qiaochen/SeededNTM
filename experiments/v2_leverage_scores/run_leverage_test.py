@@ -218,9 +218,11 @@ def run_seedtopic_with_input(dataset_name: str, cfg: dict, h5ad_path: Path,
     use_nb_obs = "--use_nb_obs" in extra_args
 
     t0 = time.time()
+    logger.info(f"CALLING do_exp with condition_feat_path={seeds_path}")
     try:
         do_exp(
             adata_h5ad_path=str(h5ad_path),
+            condition_feat_path=seeds_path,
             key_input=input_key,
             key_count_out='rna_count',
             key_topic_prior='topic_prior',
