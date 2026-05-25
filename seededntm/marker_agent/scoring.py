@@ -1,14 +1,15 @@
 """ConsensusScorer — multi-source merge with tiered weights and panel filter.
 
 Merges marker hits from all sources, applies weighted scoring, and filters
-to genes present in the spatial gene panel.
+to genes present in the spatial gene panel. Includes hit caps, cross-type
+specificity penalties, and multi-source consensus bonuses.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from seededntm.marker_agent.schemas import MarkerHit, ScoredMarker
 
@@ -21,6 +22,8 @@ DEFAULT_WEIGHTS = {
     "HPA": 0.9,
     "PubMed_LLM": 0.6,
     "PubMed_heuristic": 0.4,
+    "PubTator3": 0.8,
+    "LitVar2": 0.4,
     "MyGene": 0.3,
     "NCBIGene": 0.4,
     "OMIM": 0.5,
@@ -33,12 +36,20 @@ DEFAULT_WEIGHTS = {
     "CellxGene": 0.8,
 }
 
+TIER1_SOURCES = {"CellMarker", "PanglaoDB", "ScTypeDB"}
+
+HIT_CAP_PER_SOURCE = 50
+
+CROSS_TYPE_THRESHOLD = 0.6
+
+CURATED_BONUS = 1.5
+
 
 class ConsensusScorer:
     """Score and rank marker gene candidates from multiple sources.
 
     Merges hits across all sources, applies source-specific weights,
-    and filters to genes present in the spatial gene panel.
+    hit caps, cross-type penalties, and curated source bonuses.
     """
 
     def __init__(
@@ -47,11 +58,15 @@ class ConsensusScorer:
         weights: Optional[Dict[str, float]] = None,
         top_n: int = 20,
         require_panel: bool = True,
+        hit_cap: int = HIT_CAP_PER_SOURCE,
+        cross_type_penalty: float = 0.5,
     ):
         self.gene_panel = set(g.upper() for g in gene_panel)
         self.weights = weights if weights is not None else DEFAULT_WEIGHTS.copy()
         self.top_n = top_n
         self.require_panel = require_panel
+        self.hit_cap = hit_cap
+        self.cross_type_penalty = cross_type_penalty
 
     def score(
         self, hits: Dict[str, List[MarkerHit]]
@@ -64,16 +79,62 @@ class ConsensusScorer:
         Returns:
             Dict mapping cell_type -> sorted list of ScoredMarker
         """
-        results = {}
+        capped_hits = self._apply_hit_caps(hits)
+        cross_type_genes = self._find_cross_type_genes(capped_hits)
 
-        for cell_type, hit_list in hits.items():
-            scored = self._score_cell_type(cell_type, hit_list)
+        results = {}
+        for cell_type, hit_list in capped_hits.items():
+            scored = self._score_cell_type(cell_type, hit_list, cross_type_genes)
             results[cell_type] = scored
 
         return results
 
+    def _apply_hit_caps(
+        self, hits: Dict[str, List[MarkerHit]]
+    ) -> Dict[str, List[MarkerHit]]:
+        """Cap the number of hits per source per cell type."""
+        capped: Dict[str, List[MarkerHit]] = {}
+
+        for cell_type, hit_list in hits.items():
+            source_counts: Dict[str, int] = defaultdict(int)
+            filtered = []
+            for hit in hit_list:
+                if source_counts[hit.source] < self.hit_cap:
+                    filtered.append(hit)
+                    source_counts[hit.source] += 1
+            capped[cell_type] = filtered
+
+        return capped
+
+    def _find_cross_type_genes(
+        self, hits: Dict[str, List[MarkerHit]]
+    ) -> Set[str]:
+        """Find genes appearing in too many cell types (not type-specific)."""
+        gene_types: Dict[str, Set[str]] = defaultdict(set)
+        for cell_type, hit_list in hits.items():
+            for hit in hit_list:
+                gene_types[hit.gene_symbol.upper()].add(cell_type)
+
+        n_types = len(hits)
+        threshold = max(2, int(n_types * CROSS_TYPE_THRESHOLD))
+        cross_type = {
+            gene for gene, types in gene_types.items()
+            if len(types) >= threshold
+        }
+
+        if cross_type:
+            logger.info(
+                "Cross-type penalty applied to %d genes (in >=%d/%d types)",
+                len(cross_type), threshold, n_types,
+            )
+
+        return cross_type
+
     def _score_cell_type(
-        self, cell_type: str, hit_list: List[MarkerHit]
+        self,
+        cell_type: str,
+        hit_list: List[MarkerHit],
+        cross_type_genes: Set[str],
     ) -> List[ScoredMarker]:
         """Score markers for a single cell type."""
         gene_sources: Dict[str, Dict[str, float]] = defaultdict(dict)
@@ -102,8 +163,19 @@ class ConsensusScorer:
                 continue
 
             total_score = sum(source_scores.values())
+
+            # Stronger multi-source consensus bonus: 1 + 0.2*(n_sources-1)
             n_sources = len(source_scores)
-            total_score *= (1 + 0.1 * (n_sources - 1))
+            total_score *= (1 + 0.2 * (n_sources - 1))
+
+            # Curated source (Tier 1) priority bonus
+            curated_sources = set(source_scores.keys()) & TIER1_SOURCES
+            if curated_sources:
+                total_score *= CURATED_BONUS
+
+            # Cross-type specificity penalty
+            if gene in cross_type_genes:
+                total_score *= self.cross_type_penalty
 
             scored_markers.append(
                 ScoredMarker(
