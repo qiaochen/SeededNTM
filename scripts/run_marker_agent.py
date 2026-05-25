@@ -1,16 +1,34 @@
 #!/usr/bin/env python
 """CLI entry point for the Marker Search Agent pipeline.
 
+Supports three modes:
+  - agent:  Pure marker agent (literature-driven, parallel source queries)
+  - leiden: Automated Leiden-DE-LLM pipeline (data-driven)
+  - hybrid: Combined pipeline (both + HybridCombiner fusion)
+
 Usage:
+    # Pure marker agent (default, parallel)
     python scripts/run_marker_agent.py \
         --h5ad spatial.h5ad \
-        --species Human \
         --tissue "Colorectal cancer" \
-        --organ Colon \
-        --condition "tumor microenvironment" \
-        --expected-types "CAF,Tumor,Endothelial,Macrophage,Pericytes,Neutrophil" \
-        --output seeds_agent.json \
-        --verbose
+        --expected-types "CAF,Tumor,Endothelial" \
+        --output seeds_agent.json
+
+    # Pure Leiden-ChatGPT (automated)
+    python scripts/run_marker_agent.py \
+        --mode leiden \
+        --h5ad spatial.h5ad \
+        --tissue-desc "colorectal cancer tumor microenvironment" \
+        --output seeds_leiden.json
+
+    # Hybrid (recommended)
+    python scripts/run_marker_agent.py \
+        --mode hybrid \
+        --h5ad spatial.h5ad \
+        --tissue "Colorectal cancer" \
+        --tissue-desc "colorectal cancer tumor microenvironment" \
+        --expected-types "CAF,Tumor,Endothelial" \
+        --output seeds_hybrid.json
 """
 
 from __future__ import annotations
@@ -32,6 +50,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["agent", "leiden", "hybrid"],
+        default="agent",
+        help="Pipeline mode: 'agent' (literature), 'leiden' (data-driven), 'hybrid' (both)",
+    )
+    parser.add_argument(
         "--h5ad",
         type=str,
         default=None,
@@ -44,14 +69,20 @@ def parse_args():
         help="Path to text file with gene panel (one gene per line), or comma-separated list",
     )
     parser.add_argument("--species", type=str, default="Human")
-    parser.add_argument("--tissue", type=str, required=True)
+    parser.add_argument("--tissue", type=str, default="")
     parser.add_argument("--organ", type=str, default="")
     parser.add_argument("--condition", type=str, default="")
     parser.add_argument(
+        "--tissue-desc",
+        type=str,
+        default="",
+        help="Tissue description for Leiden-LLM annotation (e.g., 'colorectal cancer TME')",
+    )
+    parser.add_argument(
         "--expected-types",
         type=str,
-        required=True,
-        help="Comma-separated list of expected cell types",
+        default="",
+        help="Comma-separated list of expected cell types (required for agent/hybrid modes)",
     )
     parser.add_argument(
         "--n-markers", type=int, default=20,
@@ -73,6 +104,18 @@ def parse_args():
     parser.add_argument(
         "--include-disease", action="store_true",
         help="Include disease-gene databases even without explicit condition",
+    )
+    parser.add_argument(
+        "--parallel", action="store_true", default=True,
+        help="Enable parallel source queries (default: True)",
+    )
+    parser.add_argument(
+        "--no-parallel", action="store_true",
+        help="Disable parallel source queries (sequential mode for debugging)",
+    )
+    parser.add_argument(
+        "--max-workers", type=int, default=8,
+        help="Max worker threads for parallel queries",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument(
@@ -113,6 +156,173 @@ def _derive_provenance_path(output_path: str) -> str:
     return str(p.parent / f"{p.stem}_provenance.json")
 
 
+def run_agent_mode(args, gene_panel, expected_types):
+    """Run pure marker agent pipeline."""
+    from seededntm.marker_agent.schemas import DatasetContext
+    from seededntm.marker_agent.agent import MarkerSearchAgent
+
+    if not expected_types:
+        print("ERROR: --expected-types is required for agent mode", file=sys.stderr)
+        sys.exit(1)
+
+    context = DatasetContext(
+        species=args.species,
+        tissue=args.tissue,
+        organ=args.organ,
+        condition=args.condition,
+        gene_panel=gene_panel,
+        expected_cell_types=expected_types,
+        n_markers_per_type=args.n_markers,
+        include_disease_genes=args.include_disease,
+    )
+
+    use_parallel = args.parallel and not args.no_parallel
+    agent = MarkerSearchAgent(
+        context=context,
+        cache_dir=args.cache_dir,
+        use_llm=not args.no_llm,
+        verbose=args.verbose,
+        parallel=use_parallel,
+        max_workers=args.max_workers,
+    )
+
+    results = agent.run(
+        save_provenance=not args.no_provenance,
+        provenance_path=_derive_provenance_path(args.output) if not args.no_provenance else None,
+    )
+
+    agent.save_results(results, args.output, format=args.output_format)
+    return results
+
+
+def run_leiden_mode(args, gene_panel):
+    """Run Leiden-DE-LLM pipeline."""
+    import scanpy as sc
+    from seededntm.seed_construction import SeedConstructionPipeline
+
+    if not args.h5ad:
+        print("ERROR: --h5ad is required for leiden mode", file=sys.stderr)
+        sys.exit(1)
+
+    tissue_desc = args.tissue_desc or args.tissue or "unspecified tissue"
+
+    print(f"Loading h5ad: {args.h5ad}")
+    adata = sc.read_h5ad(args.h5ad)
+
+    pipeline = SeedConstructionPipeline(
+        adata=adata,
+        tissue_description=tissue_desc,
+        top_n_genes=args.n_markers,
+    )
+
+    seeds = pipeline.run()
+
+    output_data = {}
+    for cell_type, info in seeds.items():
+        output_data[cell_type] = info["features"]
+
+    with open(args.output, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+    if not args.no_provenance:
+        prov_path = _derive_provenance_path(args.output)
+        provenance = pipeline.get_provenance()
+        with open(prov_path, "w") as f:
+            json.dump(provenance, f, indent=2, default=str)
+        print(f"Provenance log: {prov_path}")
+
+    return seeds
+
+
+def run_hybrid_mode(args, gene_panel, expected_types):
+    """Run hybrid pipeline (Leiden + Agent + Combiner)."""
+    import scanpy as sc
+    from seededntm.seed_construction import SeedConstructionPipeline
+    from seededntm.marker_agent.schemas import DatasetContext
+    from seededntm.marker_agent.agent import MarkerSearchAgent
+    from seededntm.marker_agent.combiner import HybridCombiner
+
+    if not args.h5ad:
+        print("ERROR: --h5ad is required for hybrid mode", file=sys.stderr)
+        sys.exit(1)
+
+    tissue_desc = args.tissue_desc or args.tissue or "unspecified tissue"
+
+    print(f"\n{'='*60}")
+    print("HYBRID MODE: Leiden + Agent + Combiner")
+    print(f"{'='*60}")
+
+    print("\n[1/3] Running Leiden-DE-LLM pipeline...")
+    adata = sc.read_h5ad(args.h5ad)
+    leiden_pipeline = SeedConstructionPipeline(
+        adata=adata,
+        tissue_description=tissue_desc,
+        top_n_genes=args.n_markers,
+    )
+    leiden_seeds = leiden_pipeline.run()
+
+    cell_types_from_leiden = list(leiden_seeds.keys())
+    if expected_types:
+        final_types = expected_types
+    else:
+        final_types = cell_types_from_leiden
+
+    print(f"\n[2/3] Running Marker Agent (parallel={not args.no_parallel})...")
+    context = DatasetContext(
+        species=args.species,
+        tissue=args.tissue,
+        organ=args.organ,
+        condition=args.condition,
+        gene_panel=gene_panel,
+        expected_cell_types=final_types,
+        n_markers_per_type=args.n_markers,
+        include_disease_genes=args.include_disease,
+    )
+
+    use_parallel = args.parallel and not args.no_parallel
+    agent = MarkerSearchAgent(
+        context=context,
+        cache_dir=args.cache_dir,
+        use_llm=not args.no_llm,
+        verbose=args.verbose,
+        parallel=use_parallel,
+        max_workers=args.max_workers,
+    )
+    agent_results = agent.run()
+    agent_seeds = agent.to_seed_json(agent_results)
+
+    agent_scores = {}
+    for ct, markers in agent_results.items():
+        agent_scores[ct] = {m.gene_symbol: m.total_score for m in markers}
+
+    print("\n[3/3] Combining seeds (HybridCombiner)...")
+    combiner = HybridCombiner(
+        top_n=args.n_markers,
+        gene_panel=gene_panel if gene_panel else None,
+    )
+    hybrid_seeds = combiner.combine(leiden_seeds, agent_seeds, agent_scores)
+
+    output_data = {}
+    for cell_type, info in hybrid_seeds.items():
+        output_data[cell_type] = info["features"]
+
+    with open(args.output, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+    if not args.no_provenance:
+        prov_path = _derive_provenance_path(args.output)
+        provenance = {
+            "mode": "hybrid",
+            "leiden_provenance": leiden_pipeline.get_provenance(),
+            "hybrid_output": {ct: info for ct, info in hybrid_seeds.items()},
+        }
+        with open(prov_path, "w") as f:
+            json.dump(provenance, f, indent=2, default=str)
+        print(f"Provenance log: {prov_path}")
+
+    return hybrid_seeds
+
+
 def main():
     args = parse_args()
 
@@ -135,61 +345,56 @@ def main():
             "No gene panel provided. Results will not be filtered by panel membership."
         )
 
-    expected_types = [t.strip() for t in args.expected_types.split(",")]
-
-    from seededntm.marker_agent.schemas import DatasetContext
-    from seededntm.marker_agent.agent import MarkerSearchAgent
-
-    context = DatasetContext(
-        species=args.species,
-        tissue=args.tissue,
-        organ=args.organ,
-        condition=args.condition,
-        gene_panel=gene_panel,
-        expected_cell_types=expected_types,
-        n_markers_per_type=args.n_markers,
-        include_disease_genes=args.include_disease,
-    )
-
-    agent = MarkerSearchAgent(
-        context=context,
-        cache_dir=args.cache_dir,
-        use_llm=not args.no_llm,
-        verbose=args.verbose,
+    expected_types = (
+        [t.strip() for t in args.expected_types.split(",") if t.strip()]
+        if args.expected_types else []
     )
 
     print(f"\n{'='*60}")
-    print("MARKER SEARCH AGENT")
+    print(f"MARKER SEARCH AGENT — Mode: {args.mode.upper()}")
     print(f"{'='*60}")
     print(f"Species:    {args.species}")
     print(f"Tissue:     {args.tissue}")
     print(f"Organ:      {args.organ}")
     print(f"Condition:  {args.condition}")
-    print(f"Cell types: {expected_types}")
+    if expected_types:
+        print(f"Cell types: {expected_types}")
     print(f"Panel size: {len(gene_panel)} genes")
     print(f"Output:     {args.output}")
+    print(f"Parallel:   {args.parallel and not args.no_parallel}")
     print(f"{'='*60}\n")
 
-    results = agent.run(
-        save_provenance=not args.no_provenance,
-        provenance_path=_derive_provenance_path(args.output) if not args.no_provenance else None,
-    )
-
-    agent.save_results(results, args.output, format=args.output_format)
+    if args.mode == "agent":
+        results = run_agent_mode(args, gene_panel, expected_types)
+    elif args.mode == "leiden":
+        results = run_leiden_mode(args, gene_panel)
+    elif args.mode == "hybrid":
+        results = run_hybrid_mode(args, gene_panel, expected_types)
+    else:
+        print(f"ERROR: Unknown mode: {args.mode}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"\n{'='*60}")
     print("RESULTS SUMMARY")
     print(f"{'='*60}")
-    for cell_type, markers in results.items():
-        genes = [m.gene_symbol for m in markers[:10]]
-        print(f"  {cell_type}: {len(markers)} markers")
-        if genes:
-            print(f"    Top: {', '.join(genes)}")
+    if isinstance(results, dict):
+        for cell_type, value in results.items():
+            if isinstance(value, list):
+                genes = value[:10] if all(isinstance(g, str) for g in value[:1]) else []
+                if not genes and value:
+                    genes = [getattr(m, "gene_symbol", str(m)) for m in value[:10]]
+                print(f"  {cell_type}: {len(value)} markers")
+                if genes:
+                    print(f"    Top: {', '.join(genes[:10])}")
+            elif isinstance(value, dict):
+                features = value.get("features", [])
+                print(f"  {cell_type}: {len(features)} markers")
+                if features:
+                    print(f"    Top: {', '.join(features[:10])}")
     print(f"{'='*60}")
     print(f"\nResults saved to: {args.output}")
     if not args.no_provenance:
-        prov_path = _derive_provenance_path(args.output)
-        print(f"Provenance log: {prov_path}")
+        print(f"Provenance log: {_derive_provenance_path(args.output)}")
 
 
 if __name__ == "__main__":
