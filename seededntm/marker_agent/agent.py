@@ -2,13 +2,16 @@
 
 Orchestrates multi-source queries using tiered source selection,
 LLM-driven nomenclature resolution, and consensus scoring.
+Supports parallel execution via ThreadPoolExecutor.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from seededntm.marker_agent.schemas import DatasetContext, MarkerHit, ScoredMarker
@@ -24,9 +27,11 @@ class MarkerSearchAgent:
     Orchestrates source queries in a tiered fashion:
       Tier 1: Curated DBs (CellMarker, PanglaoDB, ScTypeDB)
       Tier 2: Annotation/validation (MyGene, NCBIGene)
-      Tier 3: Disease context (OMIM, DisGeNET, Ensembl, OpenTargets, COSMIC)
-      Tier 4: Literature fallback (PubMed + LLM extraction)
+      Tier 3: Disease context (OMIM, DisGeNET, LitVar2, Ensembl, OpenTargets, COSMIC)
+      Tier 4: Literature (PubTator3, PubMed + LLM extraction)
       Tier 5: Expression/atlas (HPA, GTEx, MSigDB, CellxGene)
+
+    Supports parallel execution (default) or sequential mode for debugging.
     """
 
     def __init__(
@@ -35,13 +40,18 @@ class MarkerSearchAgent:
         cache_dir: Optional[str] = None,
         use_llm: bool = True,
         verbose: bool = False,
+        parallel: bool = True,
+        max_workers: int = 8,
     ):
         self.context = context
         self.cache_dir = cache_dir
         self.use_llm = use_llm
         self.verbose = verbose
+        self.parallel = parallel
+        self.max_workers = max_workers
         self._prov: Optional["ProvenanceLogger"] = None
         self._last_provenance: Optional["ProvenanceLogger"] = None
+        self._prov_lock = threading.Lock()
 
         if verbose:
             logging.basicConfig(level=logging.INFO)
@@ -66,6 +76,8 @@ class MarkerSearchAgent:
         from seededntm.marker_agent.sources.opentargets import OpenTargetsSource
         from seededntm.marker_agent.sources.cosmic import COSMICSource
         from seededntm.marker_agent.sources.pubmed import PubMedSource
+        from seededntm.marker_agent.sources.pubtator3 import PubTator3Source
+        from seededntm.marker_agent.sources.litvar2 import LitVar2Source
 
         self._sources = {
             "panglaodb": PanglaoDBSource(cache_dir=self.cache_dir),
@@ -83,7 +95,142 @@ class MarkerSearchAgent:
             "opentargets": OpenTargetsSource(cache_dir=self.cache_dir),
             "cosmic": COSMICSource(cache_dir=self.cache_dir),
             "pubmed": PubMedSource(cache_dir=self.cache_dir),
+            "pubtator3": PubTator3Source(cache_dir=self.cache_dir),
+            "litvar2": LitVar2Source(cache_dir=self.cache_dir),
         }
+
+    def _safe_query(
+        self,
+        source_name: str,
+        source: Any,
+        alias: str,
+        cell_type: str,
+        **params: Any,
+    ) -> List[MarkerHit]:
+        """Thread-safe wrapper around a source query with provenance recording.
+
+        Returns hits on success, empty list on failure.
+        """
+        try:
+            start = time.time()
+            hits = source.search(cell_type=alias, **params)
+            elapsed_ms = (time.time() - start) * 1000
+
+            for hit in hits:
+                hit.cell_type = cell_type
+
+            if self._prov is not None:
+                with self._prov_lock:
+                    self._prov.record_query(
+                        source=source_name,
+                        cell_type=cell_type,
+                        query_params={"alias": alias, **params},
+                        n_results=len(hits),
+                        top_hits=[h.gene_symbol for h in hits[:10]],
+                        elapsed_ms=elapsed_ms,
+                    )
+
+            logger.debug(
+                "%s(%s) -> %d hits in %.0fms",
+                source_name, alias, len(hits), elapsed_ms,
+            )
+            return hits
+
+        except Exception as e:
+            logger.warning("%s failed for '%s': %s", source_name, alias, e)
+            if self._prov is not None:
+                with self._prov_lock:
+                    self._prov.record_error(
+                        source=source_name,
+                        cell_type=cell_type,
+                        error_type=type(e).__name__,
+                        message=str(e),
+                    )
+            return []
+
+    def _query_tier_parallel(
+        self,
+        source_names: List[str],
+        all_hits: Dict[str, List[MarkerHit]],
+        aliases: Dict[str, List[str]],
+        tier_label: str,
+        max_aliases: int = 3,
+        **extra_params: Any,
+    ) -> None:
+        """Query multiple sources in parallel using ThreadPoolExecutor.
+
+        Args:
+            source_names: List of source keys to query.
+            all_hits: Accumulator dict (cell_type -> hits), modified in-place.
+            aliases: Dict of cell_type -> list of alias names.
+            tier_label: Label for logging.
+            max_aliases: Max number of aliases to try per cell type.
+            extra_params: Additional kwargs passed to source.search().
+        """
+        logger.info("--- %s (parallel=%s) ---", tier_label, self.parallel)
+
+        if not self.parallel:
+            self._query_tier_sequential(
+                source_names, all_hits, aliases, max_aliases, **extra_params
+            )
+            return
+
+        hits_lock = threading.Lock()
+        futures = {}
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            for cell_type in self.context.expected_cell_types:
+                alias_list = aliases.get(cell_type, [cell_type])[:max_aliases]
+                for alias in alias_list:
+                    for source_name in source_names:
+                        source = self._sources.get(source_name)
+                        if source is None:
+                            continue
+                        params = {
+                            "tissue": self.context.tissue,
+                            "species": self.context.species,
+                            **extra_params,
+                        }
+                        fut = pool.submit(
+                            self._safe_query, source_name, source,
+                            alias, cell_type, **params,
+                        )
+                        futures[fut] = (source_name, cell_type)
+
+            for fut in as_completed(futures):
+                source_name, cell_type = futures[fut]
+                hits = fut.result()
+                if hits:
+                    with hits_lock:
+                        all_hits[cell_type].extend(hits)
+
+    def _query_tier_sequential(
+        self,
+        source_names: List[str],
+        all_hits: Dict[str, List[MarkerHit]],
+        aliases: Dict[str, List[str]],
+        max_aliases: int = 3,
+        **extra_params: Any,
+    ) -> None:
+        """Sequential fallback for tier queries (for debugging)."""
+        for cell_type in self.context.expected_cell_types:
+            alias_list = aliases.get(cell_type, [cell_type])[:max_aliases]
+            for alias in alias_list:
+                for source_name in source_names:
+                    source = self._sources.get(source_name)
+                    if source is None:
+                        continue
+                    params = {
+                        "tissue": self.context.tissue,
+                        "species": self.context.species,
+                        **extra_params,
+                    }
+                    hits = self._safe_query(
+                        source_name, source, alias, cell_type, **params
+                    )
+                    if hits:
+                        all_hits[cell_type].extend(hits)
+                    time.sleep(0.3)
 
     def run(self, save_provenance: bool = False, provenance_path: Optional[str] = None) -> Dict[str, List[ScoredMarker]]:
         """Execute the full marker search pipeline.
@@ -97,7 +244,8 @@ class MarkerSearchAgent:
             Dict mapping cell_type -> sorted list of ScoredMarker
         """
         logger.info("=" * 60)
-        logger.info("MarkerSearchAgent starting")
+        logger.info("MarkerSearchAgent starting (parallel=%s, workers=%d)",
+                    self.parallel, self.max_workers)
         logger.info("Species: %s | Tissue: %s | Organ: %s",
                     self.context.species, self.context.tissue, self.context.organ)
         logger.info("Condition: %s", self.context.condition)
@@ -115,6 +263,7 @@ class MarkerSearchAgent:
                 "expected_cell_types": self.context.expected_cell_types,
                 "n_markers_per_type": self.context.n_markers_per_type,
                 "n_panel_genes": len(self.context.gene_panel),
+                "parallel": self.parallel,
             })
         self._prov = prov
 
@@ -125,7 +274,6 @@ class MarkerSearchAgent:
         cell_type_aliases = self._resolve_nomenclature()
 
         self._query_tier1(all_hits, cell_type_aliases)
-
         self._query_tier2(all_hits, cell_type_aliases)
 
         if self.context.include_disease_genes or self.context.condition:
@@ -201,44 +349,12 @@ class MarkerSearchAgent:
         aliases: Dict[str, List[str]],
     ):
         """Query Tier 1: Curated marker databases."""
-        logger.info("--- Tier 1: Curated Databases ---")
-        tier1_sources = ["panglaodb", "cellmarker", "sctype"]
-
-        for cell_type in self.context.expected_cell_types:
-            for alias in aliases.get(cell_type, [cell_type]):
-                for source_name in tier1_sources:
-                    source = self._sources.get(source_name)
-                    if source is None:
-                        continue
-                    params = {"tissue": self.context.tissue, "species": self.context.species}
-                    try:
-                        if self._prov is not None:
-                            with self._prov.timed_query(source_name, cell_type, {"alias": alias, **params}) as rec:
-                                hits = source.search(
-                                    cell_type=alias,
-                                    tissue=self.context.tissue,
-                                    species=self.context.species,
-                                )
-                                rec.n_results = len(hits)
-                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                        else:
-                            hits = source.search(
-                                cell_type=alias,
-                                tissue=self.context.tissue,
-                                species=self.context.species,
-                            )
-                        for hit in hits:
-                            hit.cell_type = cell_type
-                        all_hits[cell_type].extend(hits)
-                    except Exception as e:
-                        logger.warning(
-                            "Tier 1 %s failed for '%s': %s", source_name, alias, e
-                        )
-                        if self._prov is not None:
-                            self._prov.record_error(
-                                source=source_name, cell_type=cell_type,
-                                error_type=type(e).__name__, message=str(e),
-                            )
+        self._query_tier_parallel(
+            source_names=["panglaodb", "cellmarker", "sctype"],
+            all_hits=all_hits,
+            aliases=aliases,
+            tier_label="Tier 1: Curated Databases",
+        )
 
     def _query_tier2(
         self,
@@ -246,129 +362,62 @@ class MarkerSearchAgent:
         aliases: Dict[str, List[str]],
     ):
         """Query Tier 2: Gene annotation and validation."""
-        logger.info("--- Tier 2: Annotation Sources ---")
-        tier2_sources = ["mygene", "ncbi_gene"]
-
-        for cell_type in self.context.expected_cell_types:
-            for alias in aliases.get(cell_type, [cell_type])[:2]:
-                for source_name in tier2_sources:
-                    source = self._sources.get(source_name)
-                    if source is None:
-                        continue
-                    params = {"tissue": self.context.tissue, "species": self.context.species}
-                    try:
-                        if self._prov is not None:
-                            with self._prov.timed_query(source_name, cell_type, {"alias": alias, **params}) as rec:
-                                hits = source.search(
-                                    cell_type=alias,
-                                    tissue=self.context.tissue,
-                                    species=self.context.species,
-                                )
-                                rec.n_results = len(hits)
-                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                        else:
-                            hits = source.search(
-                                cell_type=alias,
-                                tissue=self.context.tissue,
-                                species=self.context.species,
-                            )
-                        for hit in hits:
-                            hit.cell_type = cell_type
-                        all_hits[cell_type].extend(hits)
-                    except Exception as e:
-                        logger.warning(
-                            "Tier 2 %s failed for '%s': %s", source_name, alias, e
-                        )
-                        if self._prov is not None:
-                            self._prov.record_error(
-                                source=source_name, cell_type=cell_type,
-                                error_type=type(e).__name__, message=str(e),
-                            )
-                time.sleep(0.5)
+        self._query_tier_parallel(
+            source_names=["mygene", "ncbi_gene"],
+            all_hits=all_hits,
+            aliases=aliases,
+            tier_label="Tier 2: Annotation Sources",
+            max_aliases=2,
+        )
 
     def _query_tier3(
         self,
         all_hits: Dict[str, List[MarkerHit]],
         aliases: Dict[str, List[str]],
     ):
-        """Query Tier 3: Disease-gene databases."""
-        logger.info("--- Tier 3: Disease Sources ---")
+        """Query Tier 3: Disease-gene databases + LitVar2."""
         tier3_sources = ["omim", "disgenet", "opentargets", "cosmic"]
+        self._query_tier_parallel(
+            source_names=tier3_sources,
+            all_hits=all_hits,
+            aliases=aliases,
+            tier_label="Tier 3: Disease Sources",
+            max_aliases=1,
+            condition=self.context.condition,
+        )
 
-        for cell_type in self.context.expected_cell_types:
-            for source_name in tier3_sources:
-                source = self._sources.get(source_name)
-                if source is None:
-                    continue
-                params = {
-                    "tissue": self.context.tissue,
-                    "species": self.context.species,
-                    "condition": self.context.condition,
-                }
-                try:
-                    if self._prov is not None:
-                        with self._prov.timed_query(source_name, cell_type, params) as rec:
-                            hits = source.search(
-                                cell_type=cell_type,
-                                tissue=self.context.tissue,
-                                species=self.context.species,
-                                condition=self.context.condition,
-                            )
-                            rec.n_results = len(hits)
-                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                    else:
-                        hits = source.search(
-                            cell_type=cell_type,
-                            tissue=self.context.tissue,
-                            species=self.context.species,
-                            condition=self.context.condition,
-                        )
-                    for hit in hits:
-                        hit.cell_type = cell_type
-                    all_hits[cell_type].extend(hits)
-                except Exception as e:
-                    logger.warning(
-                        "Tier 3 %s failed for '%s': %s", source_name, cell_type, e
-                    )
-                    if self._prov is not None:
-                        self._prov.record_error(
-                            source=source_name, cell_type=cell_type,
-                            error_type=type(e).__name__, message=str(e),
-                        )
-
+        # LitVar2 needs candidate genes from other sources
         candidate_genes = list(set(
             hit.gene_symbol for hits in all_hits.values() for hit in hits
         ))[:30]
+
+        if candidate_genes:
+            litvar2 = self._sources.get("litvar2")
+            if litvar2:
+                for cell_type in self.context.expected_cell_types:
+                    hits = self._safe_query(
+                        "litvar2", litvar2, cell_type, cell_type,
+                        tissue=self.context.tissue,
+                        species=self.context.species,
+                        condition=self.context.condition,
+                        candidate_genes=candidate_genes,
+                    )
+                    if hits:
+                        all_hits[cell_type].extend(hits)
+
+        # Ensembl also needs candidate genes
         if candidate_genes:
             ensembl = self._sources.get("ensembl")
             if ensembl:
                 for cell_type in self.context.expected_cell_types:
-                    try:
-                        if self._prov is not None:
-                            with self._prov.timed_query("ensembl", cell_type, {"gene_list_size": len(candidate_genes)}) as rec:
-                                hits = ensembl.search(
-                                    cell_type=cell_type,
-                                    tissue=self.context.tissue,
-                                    species=self.context.species,
-                                    gene_list=candidate_genes,
-                                )
-                                rec.n_results = len(hits)
-                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                        else:
-                            hits = ensembl.search(
-                                cell_type=cell_type,
-                                tissue=self.context.tissue,
-                                species=self.context.species,
-                                gene_list=candidate_genes,
-                            )
+                    hits = self._safe_query(
+                        "ensembl", ensembl, cell_type, cell_type,
+                        tissue=self.context.tissue,
+                        species=self.context.species,
+                        gene_list=candidate_genes,
+                    )
+                    if hits:
                         all_hits[cell_type].extend(hits)
-                    except Exception as e:
-                        logger.warning("Ensembl failed for '%s': %s", cell_type, e)
-                        if self._prov is not None:
-                            self._prov.record_error(
-                                source="ensembl", cell_type=cell_type,
-                                error_type=type(e).__name__, message=str(e),
-                            )
 
     def _query_tier4(
         self,
@@ -376,50 +425,59 @@ class MarkerSearchAgent:
         aliases: Dict[str, List[str]],
         sparse_types: List[str],
     ):
-        """Query Tier 4: Literature fallback for sparse cell types."""
-        logger.info("--- Tier 4: Literature Fallback (sparse: %s) ---", sparse_types)
+        """Query Tier 4: Literature sources (PubTator3 + PubMed fallback)."""
+        logger.info("--- Tier 4: Literature (sparse: %s) ---", sparse_types)
 
-        pubmed = self._sources.get("pubmed")
-        if pubmed is None:
-            return
-
-        for cell_type in sparse_types:
-            for alias in aliases.get(cell_type, [cell_type])[:2]:
-                params = {
-                    "tissue": self.context.tissue,
-                    "species": self.context.species,
-                    "use_llm": self.use_llm,
-                }
-                try:
-                    if self._prov is not None:
-                        with self._prov.timed_query("pubmed", cell_type, {"alias": alias, **params}) as rec:
-                            hits = pubmed.search(
-                                cell_type=alias,
+        # PubTator3 for all sparse types (no LLM needed)
+        pubtator3 = self._sources.get("pubtator3")
+        if pubtator3:
+            if self.parallel:
+                hits_lock = threading.Lock()
+                futures = {}
+                with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                    for cell_type in sparse_types:
+                        for alias in aliases.get(cell_type, [cell_type])[:2]:
+                            fut = pool.submit(
+                                self._safe_query, "pubtator3", pubtator3,
+                                alias, cell_type,
                                 tissue=self.context.tissue,
                                 species=self.context.species,
-                                use_llm=self.use_llm,
+                                condition=self.context.condition,
                             )
-                            rec.n_results = len(hits)
-                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                    else:
-                        hits = pubmed.search(
-                            cell_type=alias,
+                            futures[fut] = cell_type
+                    for fut in as_completed(futures):
+                        cell_type = futures[fut]
+                        hits = fut.result()
+                        if hits:
+                            with hits_lock:
+                                all_hits[cell_type].extend(hits)
+            else:
+                for cell_type in sparse_types:
+                    for alias in aliases.get(cell_type, [cell_type])[:2]:
+                        hits = self._safe_query(
+                            "pubtator3", pubtator3, alias, cell_type,
                             tissue=self.context.tissue,
                             species=self.context.species,
-                            use_llm=self.use_llm,
+                            condition=self.context.condition,
                         )
-                    for hit in hits:
-                        hit.cell_type = cell_type
-                    all_hits[cell_type].extend(hits)
-                except Exception as e:
-                    logger.warning("Tier 4 PubMed failed for '%s': %s", alias, e)
-                    if self._prov is not None:
-                        self._prov.record_error(
-                            source="pubmed", cell_type=cell_type,
-                            error_type=type(e).__name__, message=str(e),
-                            fallback_used="skipped (no alternative)",
-                        )
-                time.sleep(1.0)
+                        if hits:
+                            all_hits[cell_type].extend(hits)
+
+        # PubMed + LLM extraction as fallback for still-sparse types
+        still_sparse = [ct for ct in sparse_types if len(all_hits[ct]) < 5]
+        pubmed = self._sources.get("pubmed")
+        if pubmed and still_sparse:
+            for cell_type in still_sparse:
+                for alias in aliases.get(cell_type, [cell_type])[:2]:
+                    hits = self._safe_query(
+                        "pubmed", pubmed, alias, cell_type,
+                        tissue=self.context.tissue,
+                        species=self.context.species,
+                        use_llm=self.use_llm,
+                    )
+                    if hits:
+                        all_hits[cell_type].extend(hits)
+                    time.sleep(1.0)
 
     def _query_tier5(
         self,
@@ -427,43 +485,13 @@ class MarkerSearchAgent:
         aliases: Dict[str, List[str]],
     ):
         """Query Tier 5: Expression and atlas data."""
-        logger.info("--- Tier 5: Expression/Atlas Sources ---")
-        tier5_sources = ["hpa", "gtex", "msigdb", "cellxgene"]
-
-        for cell_type in self.context.expected_cell_types:
-            for source_name in tier5_sources:
-                source = self._sources.get(source_name)
-                if source is None:
-                    continue
-                params = {"tissue": self.context.tissue, "species": self.context.species}
-                try:
-                    if self._prov is not None:
-                        with self._prov.timed_query(source_name, cell_type, params) as rec:
-                            hits = source.search(
-                                cell_type=cell_type,
-                                tissue=self.context.tissue,
-                                species=self.context.species,
-                            )
-                            rec.n_results = len(hits)
-                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
-                    else:
-                        hits = source.search(
-                            cell_type=cell_type,
-                            tissue=self.context.tissue,
-                            species=self.context.species,
-                        )
-                    for hit in hits:
-                        hit.cell_type = cell_type
-                    all_hits[cell_type].extend(hits)
-                except Exception as e:
-                    logger.warning(
-                        "Tier 5 %s failed for '%s': %s", source_name, cell_type, e
-                    )
-                    if self._prov is not None:
-                        self._prov.record_error(
-                            source=source_name, cell_type=cell_type,
-                            error_type=type(e).__name__, message=str(e),
-                        )
+        self._query_tier_parallel(
+            source_names=["hpa", "gtex", "msigdb", "cellxgene"],
+            all_hits=all_hits,
+            aliases=aliases,
+            tier_label="Tier 5: Expression/Atlas Sources",
+            max_aliases=1,
+        )
 
     def _record_scoring_provenance(
         self, results: Dict[str, List[ScoredMarker]]
