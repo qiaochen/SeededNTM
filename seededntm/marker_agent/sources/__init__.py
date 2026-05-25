@@ -15,6 +15,8 @@ from seededntm.marker_agent.sources.ensembl import EnsemblSource
 from seededntm.marker_agent.sources.opentargets import OpenTargetsSource
 from seededntm.marker_agent.sources.cosmic import COSMICSource
 from seededntm.marker_agent.sources.pubmed import PubMedSource
+from seededntm.marker_agent.sources.pubtator3 import PubTator3Source
+from seededntm.marker_agent.sources.litvar2 import LitVar2Source
 
 __all__ = [
     "CellMarkerSource",
@@ -32,4 +34,6 @@ __all__ = [
     "OpenTargetsSource",
     "COSMICSource",
     "PubMedSource",
+    "PubTator3Source",
+    "LitVar2Source",
 ]
