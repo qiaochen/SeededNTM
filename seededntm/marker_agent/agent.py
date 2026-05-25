@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from seededntm.marker_agent.schemas import DatasetContext, MarkerHit, ScoredMarker
 from seededntm.marker_agent.scoring import ConsensusScorer
+from seededntm.marker_agent.provenance import ProvenanceLogger
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class MarkerSearchAgent:
         self.cache_dir = cache_dir
         self.use_llm = use_llm
         self.verbose = verbose
+        self._prov: Optional["ProvenanceLogger"] = None
+        self._last_provenance: Optional["ProvenanceLogger"] = None
 
         if verbose:
             logging.basicConfig(level=logging.INFO)
@@ -82,8 +85,13 @@ class MarkerSearchAgent:
             "pubmed": PubMedSource(cache_dir=self.cache_dir),
         }
 
-    def run(self) -> Dict[str, List[ScoredMarker]]:
+    def run(self, save_provenance: bool = False, provenance_path: Optional[str] = None) -> Dict[str, List[ScoredMarker]]:
         """Execute the full marker search pipeline.
+
+        Args:
+            save_provenance: If True, write a provenance JSON alongside results.
+            provenance_path: Explicit path for provenance file. If None and
+                save_provenance is True, derived from output path.
 
         Returns:
             Dict mapping cell_type -> sorted list of ScoredMarker
@@ -96,6 +104,19 @@ class MarkerSearchAgent:
         logger.info("Cell types: %s", self.context.expected_cell_types)
         logger.info("Gene panel size: %d", len(self.context.gene_panel))
         logger.info("=" * 60)
+
+        prov: Optional[ProvenanceLogger] = None
+        if save_provenance:
+            prov = ProvenanceLogger(context={
+                "species": self.context.species,
+                "tissue": self.context.tissue,
+                "organ": self.context.organ,
+                "condition": self.context.condition,
+                "expected_cell_types": self.context.expected_cell_types,
+                "n_markers_per_type": self.context.n_markers_per_type,
+                "n_panel_genes": len(self.context.gene_panel),
+            })
+        self._prov = prov
 
         all_hits: Dict[str, List[MarkerHit]] = {
             ct: [] for ct in self.context.expected_cell_types
@@ -125,7 +146,16 @@ class MarkerSearchAgent:
         )
         results = scorer.score(all_hits)
 
+        if prov is not None:
+            self._record_scoring_provenance(results)
+
         self._log_summary(results, all_hits)
+
+        if prov is not None and provenance_path:
+            prov.save(provenance_path)
+            logger.info("Provenance log saved to %s", provenance_path)
+
+        self._last_provenance = prov
 
         return results
 
@@ -138,11 +168,27 @@ class MarkerSearchAgent:
                 try:
                     from seededntm.marker_agent.llm_client import llm_resolve_cell_type
                     context_str = f"{self.context.tissue} ({self.context.condition})"
-                    synonyms = llm_resolve_cell_type(cell_type, context_str)
+                    input_summary = f"Resolve '{cell_type}' for context: {context_str}"
+
+                    if self._prov is not None:
+                        with self._prov.timed_llm_call("nomenclature_resolution", input_summary) as rec:
+                            synonyms = llm_resolve_cell_type(cell_type, context_str)
+                            rec.output_summary = ", ".join(synonyms[:10])
+                    else:
+                        synonyms = llm_resolve_cell_type(cell_type, context_str)
+
                     aliases[cell_type] = synonyms
                     logger.info("Resolved '%s' -> %s", cell_type, synonyms)
                 except Exception as e:
                     logger.warning("LLM resolution failed for '%s': %s", cell_type, e)
+                    if self._prov is not None:
+                        self._prov.record_error(
+                            source="LLM",
+                            cell_type=cell_type,
+                            error_type=type(e).__name__,
+                            message=str(e),
+                            fallback_used="identity (original name only)",
+                        )
                     aliases[cell_type] = [cell_type]
             else:
                 aliases[cell_type] = [cell_type]
@@ -164,12 +210,23 @@ class MarkerSearchAgent:
                     source = self._sources.get(source_name)
                     if source is None:
                         continue
+                    params = {"tissue": self.context.tissue, "species": self.context.species}
                     try:
-                        hits = source.search(
-                            cell_type=alias,
-                            tissue=self.context.tissue,
-                            species=self.context.species,
-                        )
+                        if self._prov is not None:
+                            with self._prov.timed_query(source_name, cell_type, {"alias": alias, **params}) as rec:
+                                hits = source.search(
+                                    cell_type=alias,
+                                    tissue=self.context.tissue,
+                                    species=self.context.species,
+                                )
+                                rec.n_results = len(hits)
+                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                        else:
+                            hits = source.search(
+                                cell_type=alias,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                            )
                         for hit in hits:
                             hit.cell_type = cell_type
                         all_hits[cell_type].extend(hits)
@@ -177,6 +234,11 @@ class MarkerSearchAgent:
                         logger.warning(
                             "Tier 1 %s failed for '%s': %s", source_name, alias, e
                         )
+                        if self._prov is not None:
+                            self._prov.record_error(
+                                source=source_name, cell_type=cell_type,
+                                error_type=type(e).__name__, message=str(e),
+                            )
 
     def _query_tier2(
         self,
@@ -193,12 +255,23 @@ class MarkerSearchAgent:
                     source = self._sources.get(source_name)
                     if source is None:
                         continue
+                    params = {"tissue": self.context.tissue, "species": self.context.species}
                     try:
-                        hits = source.search(
-                            cell_type=alias,
-                            tissue=self.context.tissue,
-                            species=self.context.species,
-                        )
+                        if self._prov is not None:
+                            with self._prov.timed_query(source_name, cell_type, {"alias": alias, **params}) as rec:
+                                hits = source.search(
+                                    cell_type=alias,
+                                    tissue=self.context.tissue,
+                                    species=self.context.species,
+                                )
+                                rec.n_results = len(hits)
+                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                        else:
+                            hits = source.search(
+                                cell_type=alias,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                            )
                         for hit in hits:
                             hit.cell_type = cell_type
                         all_hits[cell_type].extend(hits)
@@ -206,6 +279,11 @@ class MarkerSearchAgent:
                         logger.warning(
                             "Tier 2 %s failed for '%s': %s", source_name, alias, e
                         )
+                        if self._prov is not None:
+                            self._prov.record_error(
+                                source=source_name, cell_type=cell_type,
+                                error_type=type(e).__name__, message=str(e),
+                            )
                 time.sleep(0.5)
 
     def _query_tier3(
@@ -222,13 +300,29 @@ class MarkerSearchAgent:
                 source = self._sources.get(source_name)
                 if source is None:
                     continue
+                params = {
+                    "tissue": self.context.tissue,
+                    "species": self.context.species,
+                    "condition": self.context.condition,
+                }
                 try:
-                    hits = source.search(
-                        cell_type=cell_type,
-                        tissue=self.context.tissue,
-                        species=self.context.species,
-                        condition=self.context.condition,
-                    )
+                    if self._prov is not None:
+                        with self._prov.timed_query(source_name, cell_type, params) as rec:
+                            hits = source.search(
+                                cell_type=cell_type,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                                condition=self.context.condition,
+                            )
+                            rec.n_results = len(hits)
+                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                    else:
+                        hits = source.search(
+                            cell_type=cell_type,
+                            tissue=self.context.tissue,
+                            species=self.context.species,
+                            condition=self.context.condition,
+                        )
                     for hit in hits:
                         hit.cell_type = cell_type
                     all_hits[cell_type].extend(hits)
@@ -236,6 +330,11 @@ class MarkerSearchAgent:
                     logger.warning(
                         "Tier 3 %s failed for '%s': %s", source_name, cell_type, e
                     )
+                    if self._prov is not None:
+                        self._prov.record_error(
+                            source=source_name, cell_type=cell_type,
+                            error_type=type(e).__name__, message=str(e),
+                        )
 
         candidate_genes = list(set(
             hit.gene_symbol for hits in all_hits.values() for hit in hits
@@ -245,15 +344,31 @@ class MarkerSearchAgent:
             if ensembl:
                 for cell_type in self.context.expected_cell_types:
                     try:
-                        hits = ensembl.search(
-                            cell_type=cell_type,
-                            tissue=self.context.tissue,
-                            species=self.context.species,
-                            gene_list=candidate_genes,
-                        )
+                        if self._prov is not None:
+                            with self._prov.timed_query("ensembl", cell_type, {"gene_list_size": len(candidate_genes)}) as rec:
+                                hits = ensembl.search(
+                                    cell_type=cell_type,
+                                    tissue=self.context.tissue,
+                                    species=self.context.species,
+                                    gene_list=candidate_genes,
+                                )
+                                rec.n_results = len(hits)
+                                rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                        else:
+                            hits = ensembl.search(
+                                cell_type=cell_type,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                                gene_list=candidate_genes,
+                            )
                         all_hits[cell_type].extend(hits)
                     except Exception as e:
                         logger.warning("Ensembl failed for '%s': %s", cell_type, e)
+                        if self._prov is not None:
+                            self._prov.record_error(
+                                source="ensembl", cell_type=cell_type,
+                                error_type=type(e).__name__, message=str(e),
+                            )
 
     def _query_tier4(
         self,
@@ -270,18 +385,40 @@ class MarkerSearchAgent:
 
         for cell_type in sparse_types:
             for alias in aliases.get(cell_type, [cell_type])[:2]:
+                params = {
+                    "tissue": self.context.tissue,
+                    "species": self.context.species,
+                    "use_llm": self.use_llm,
+                }
                 try:
-                    hits = pubmed.search(
-                        cell_type=alias,
-                        tissue=self.context.tissue,
-                        species=self.context.species,
-                        use_llm=self.use_llm,
-                    )
+                    if self._prov is not None:
+                        with self._prov.timed_query("pubmed", cell_type, {"alias": alias, **params}) as rec:
+                            hits = pubmed.search(
+                                cell_type=alias,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                                use_llm=self.use_llm,
+                            )
+                            rec.n_results = len(hits)
+                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                    else:
+                        hits = pubmed.search(
+                            cell_type=alias,
+                            tissue=self.context.tissue,
+                            species=self.context.species,
+                            use_llm=self.use_llm,
+                        )
                     for hit in hits:
                         hit.cell_type = cell_type
                     all_hits[cell_type].extend(hits)
                 except Exception as e:
                     logger.warning("Tier 4 PubMed failed for '%s': %s", alias, e)
+                    if self._prov is not None:
+                        self._prov.record_error(
+                            source="pubmed", cell_type=cell_type,
+                            error_type=type(e).__name__, message=str(e),
+                            fallback_used="skipped (no alternative)",
+                        )
                 time.sleep(1.0)
 
     def _query_tier5(
@@ -298,12 +435,23 @@ class MarkerSearchAgent:
                 source = self._sources.get(source_name)
                 if source is None:
                     continue
+                params = {"tissue": self.context.tissue, "species": self.context.species}
                 try:
-                    hits = source.search(
-                        cell_type=cell_type,
-                        tissue=self.context.tissue,
-                        species=self.context.species,
-                    )
+                    if self._prov is not None:
+                        with self._prov.timed_query(source_name, cell_type, params) as rec:
+                            hits = source.search(
+                                cell_type=cell_type,
+                                tissue=self.context.tissue,
+                                species=self.context.species,
+                            )
+                            rec.n_results = len(hits)
+                            rec.top_hits = [h.gene_symbol for h in hits[:10]]
+                    else:
+                        hits = source.search(
+                            cell_type=cell_type,
+                            tissue=self.context.tissue,
+                            species=self.context.species,
+                        )
                     for hit in hits:
                         hit.cell_type = cell_type
                     all_hits[cell_type].extend(hits)
@@ -311,6 +459,25 @@ class MarkerSearchAgent:
                     logger.warning(
                         "Tier 5 %s failed for '%s': %s", source_name, cell_type, e
                     )
+                    if self._prov is not None:
+                        self._prov.record_error(
+                            source=source_name, cell_type=cell_type,
+                            error_type=type(e).__name__, message=str(e),
+                        )
+
+    def _record_scoring_provenance(
+        self, results: Dict[str, List[ScoredMarker]]
+    ):
+        """Record per-gene scoring breakdown into provenance log."""
+        if self._prov is None:
+            return
+        for cell_type, markers in results.items():
+            gene_scores = {}
+            for m in markers:
+                scores_dict = dict(m.source_scores)
+                scores_dict["total"] = m.total_score
+                gene_scores[m.gene_symbol] = scores_dict
+            self._prov.record_scoring(cell_type, gene_scores)
 
     def _log_summary(
         self,
@@ -376,11 +543,13 @@ class MarkerSearchAgent:
         results: Dict[str, List[ScoredMarker]],
         output_path: str,
         format: str = "seeds",
+        save_provenance: bool = False,
     ):
         """Save results to a JSON file.
 
         Args:
             format: 'seeds' for simple gene lists, 'evidence' for detailed output
+            save_provenance: If True, save provenance JSON alongside the output.
         """
         if format == "seeds":
             data = self.to_seed_json(results)
@@ -391,3 +560,15 @@ class MarkerSearchAgent:
             json.dump(data, f, indent=2)
 
         logger.info("Results saved to %s", output_path)
+
+        if save_provenance and self._last_provenance is not None:
+            prov_path = self._derive_provenance_path(output_path)
+            self._last_provenance.save(prov_path)
+            logger.info("Provenance log saved to %s", prov_path)
+
+    @staticmethod
+    def _derive_provenance_path(output_path: str) -> str:
+        """Derive provenance file path from the main output path."""
+        from pathlib import Path
+        p = Path(output_path)
+        return str(p.parent / f"{p.stem}_provenance.json")

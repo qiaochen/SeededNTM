@@ -75,6 +75,14 @@ def parse_args():
         help="Include disease-gene databases even without explicit condition",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument(
+        "--save-provenance", action="store_true", default=True,
+        help="Save provenance JSON alongside seeds output (default: True)",
+    )
+    parser.add_argument(
+        "--no-provenance", action="store_true",
+        help="Disable provenance logging",
+    )
 
     return parser.parse_args()
 
@@ -97,6 +105,12 @@ def load_gene_panel(h5ad_path: str = None, panel_path: str = None) -> list:
             return [g.strip() for g in panel_path.split(",") if g.strip()]
 
     return []
+
+
+def _derive_provenance_path(output_path: str) -> str:
+    """Derive provenance file path from the main output path."""
+    p = Path(output_path)
+    return str(p.parent / f"{p.stem}_provenance.json")
 
 
 def main():
@@ -156,7 +170,10 @@ def main():
     print(f"Output:     {args.output}")
     print(f"{'='*60}\n")
 
-    results = agent.run()
+    results = agent.run(
+        save_provenance=not args.no_provenance,
+        provenance_path=_derive_provenance_path(args.output) if not args.no_provenance else None,
+    )
 
     agent.save_results(results, args.output, format=args.output_format)
 
@@ -170,6 +187,9 @@ def main():
             print(f"    Top: {', '.join(genes)}")
     print(f"{'='*60}")
     print(f"\nResults saved to: {args.output}")
+    if not args.no_provenance:
+        prov_path = _derive_provenance_path(args.output)
+        print(f"Provenance log: {prov_path}")
 
 
 if __name__ == "__main__":

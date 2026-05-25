@@ -12,6 +12,7 @@ from seededntm.marker_agent.schemas import (
     ScoredMarker,
 )
 from seededntm.marker_agent.agent import MarkerSearchAgent
+from seededntm.marker_agent.provenance import ProvenanceLogger
 
 __all__ = [
     "DatasetContext",
@@ -19,4 +20,5 @@ __all__ = [
     "GeneAnnotation",
     "ScoredMarker",
     "MarkerSearchAgent",
+    "ProvenanceLogger",
 ]
