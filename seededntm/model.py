@@ -942,17 +942,27 @@ class SeededNTM(nn.Module):
             logtheta = pyro.sample(
                 "logtheta", dist.Normal(logtheta_loc, logtheta_scale).to_event(1))
             
-    def regularizer_topic_prior(self, logtheta_loc, topic_prior=None):
+    def regularizer_topic_prior(self, logtheta_loc, topic_prior=None, confidence_weighted=False):
         loss = 0
         if not topic_prior is None:
             valid_sel = (topic_prior.sum(dim=1) > 0.5)
             if valid_sel.sum() > 0:
-                loss = torch.nn.CrossEntropyLoss(
-                                                 label_smoothing=0.01, reduction='sum')(
-                        logtheta_loc[valid_sel], 
+                if confidence_weighted:
+                    entropy = -(topic_prior[valid_sel] * (topic_prior[valid_sel] + 1e-8).log()).sum(dim=1)
+                    max_entropy = math.log(topic_prior.shape[1])
+                    confidence = 1.0 - entropy / max_entropy
+                    per_cell_loss = F.cross_entropy(
+                        logtheta_loc[valid_sel],
                         topic_prior[valid_sel].float(),
-                    )
-                loss = loss / valid_sel.sum()
+                        reduction='none')
+                    loss = (per_cell_loss * confidence).mean()
+                else:
+                    loss = torch.nn.CrossEntropyLoss(
+                                                     label_smoothing=0.01, reduction='sum')(
+                            logtheta_loc[valid_sel], 
+                            topic_prior[valid_sel].float(),
+                        )
+                    loss = loss / valid_sel.sum()
         return loss
 
     def infer_topic(self, input, batch_labels=None):
