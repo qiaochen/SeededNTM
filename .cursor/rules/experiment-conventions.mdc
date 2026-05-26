@@ -1,0 +1,122 @@
+---
+description: SeedTopic project experiment and codebase conventions. MUST be followed at all times.
+alwaysApply: true
+---
+
+# SeedTopic Project Conventions
+
+## Core Principle: SeedTopic Is ONE Model
+
+SeedTopic reference-based and reference-free differ ONLY in seed derivation. Everything else is identical: same spatial adata, same preprocessing, same representation, same prior computation, same model architecture, same hyperparameters, same training loop, same evaluation.
+
+## Experiment Conventions
+
+1. **Never run experiments from the IDE.** Only create scripts. The user launches them on the external compute node.
+2. **Never set `CUDA_VISIBLE_DEVICES` or any GPU environment variable.** Only use `cuda:0` or `.cuda()` in code.
+3. **Experiment scripts are standalone files** in `experiments/`. They must not require modifications to core `seededntm/` source code.
+4. **All 6 metrics must be reported:** AMI, ARI, F1, Precision, Recall, AUPRC (plus supplementary: Pearson, Spearman, RMSE, JSD).
+5. **Environment:** `micromamba activate seededntm` (for SeedTopic/STAMP) or `micromamba activate transpa` (for FlashDeconv/RCTD/MarkerScore).
+6. **Parallel processing:** Shell launchers should run up to 6 processes in parallel, interleaving datasets to avoid GPU memory contention.
+7. **Early stopping:** Only enable `early_stop=True` for xenium_BC. All other datasets must train for the full epoch count.
+8. **Shell scripts use `set -eo pipefail`** (NOT `-u`). Conda/micromamba deactivation hooks reference unset variables and will crash with `-u`. Wrap `micromamba activate` calls with `set +u` / `set -u` if strict mode is needed elsewhere.
+
+## Canonical SeedTopic Hyperparameters (IMMUTABLE)
+
+These are the ONLY correct values. Any deviation is a bug.
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `use_nb_obs` | `True` | ALWAYS. No exceptions. |
+| `enc_hid_dim` | `64` | |
+| `n_epochs` | `800` | |
+| `batch_size` | `8192` | |
+| `lr` | `0.01` | AdamW(betas=(0.90, 0.999)) |
+| `wt_fusion_top_seed` | `1.0` | |
+| `pos_scale` | `0.5` | |
+| `dropout` | `0.2` (default) | |
+| `is_group_mode` | `False` | |
+| `seed` | `0` | |
+| `clip_norm` | `5.0` | |
+| `base_alpha` | `199` | |
+| `floor` | `0.8` | |
+| `early_stop` | `True` ONLY for xenium_BC | All others: `False` |
+| `temperature` | `0.8` | For topic prior computation |
+| `k_neighbors` | `6` | For spatial smoothing (when applicable) |
+| `representation` | `idf_lev_seed_spec` | Ablation winner (avg rank #1) |
+| `prior_mode` | `standard` | Ablation winner |
+
+## No Conditional Hyperparameters
+
+1. **NEVER vary model architecture parameters by dataset name.** If a parameter is universal, hardcode it as a constant. Conditional logic like `use_nb_obs=(dataset_name.startswith("visiumHD"))` is FORBIDDEN.
+2. **No per-dataset representation/prior tuning.** ONE universal (representation, prior_mode) configuration must be used across all datasets. The universal config is selected via ablation (average rank across all metrics and datasets).
+3. **Representation and prior mode are selected by ablation, not by developer intuition.** Let data decide.
+
+## Seed Derivation
+
+1. **Reference-based SeedTopic:** seeds must replicate the original method's pipeline EXACTLY (subset reference → DE analysis → top 20 genes per type). This is the method's design, not a tunable parameter.
+2. **Reference-free SeedTopic (leiden-chatgpt):** seeds are derived from unsupervised clustering (Leiden) of the spatial data + LLM annotation. This is a separate experimental track.
+3. **Both tracks use the SAME spatial adata, same pipeline, same hyperparameters.** Only the seed JSON file differs.
+
+## Benchmark Fairness (Publication-Grade)
+
+1. **Same spatial data for ALL methods.** All methods receive identical input from `processed/{dataset}/spatial_adata.h5ad`. No legacy V21D_DATA_PATHS. No per-method preprocessing.
+2. **Raw counts in `.X`.** The canonical spatial adata stores raw counts. Each method applies its own internal preprocessing (normalization, log1p, etc.) as designed by its authors.
+3. **Same reference for reference-based methods.** FlashDeconv, RCTD, MarkerScore all receive `reference_subset.h5ad`.
+4. **Same spots evaluated.** If any method filters spots (e.g., RCTD), report both full-set and filtered-subset results. Primary comparison uses the same spot set.
+5. **Same metrics computation.** Direct-label metrics for named methods; Hungarian matching ONLY for STAMP (unsupervised, unnamed topics).
+6. **6 methods in the benchmark:** FlashDeconv, RCTD, MarkerScore, STAMP, SeedTopic ref-based, SeedTopic ref-free.
+7. **All seed genes must exist in spatial_adata.var_names.** If any seed gene is missing, the script MUST fail loudly — never silently drop genes.
+
+## Reproducibility and Traceability
+
+1. **Clean start before every run.** Delete ALL cached results (JSON, raw_outputs/, logs) before running. Never append to old results.
+2. **Startup logging is mandatory.** Every experiment run must log: git commit hash, input file paths, data shapes, all hyperparameters, seed gene checksums, package versions.
+3. **Results must include provenance.** Each result entry includes: method, dataset, timestamp, all metrics, runtime, full hyperparameter dump, data shapes and paths.
+4. **No legacy paths.** Never load from old experiment directories. All data processed from scratch via `preprocess_data.py`.
+
+## Correctness Over Computation
+
+1. **Never cut corners to save compute time.** If an experiment's inputs, preprocessing, or configuration are inconsistent with the canonical spec, the results are invalid.
+2. **If inconsistency is found, rerun from scratch.** Do not attempt to salvage partial results from a misconfigured experiment.
+3. **Verify before running.** Before launching any experiment, trace through the full execution path and confirm EVERY parameter matches the canonical spec. Use assertions.
+4. **No iterative debugging on the compute node.** Fix ALL bugs in one pass through thorough code review and unit tests. Run unit tests BEFORE launching experiments.
+5. **Data provenance must be explicit.** If two experiments claim to use the same config but produce different results, the logs must make it trivial to identify what diverged.
+6. **Unit tests confirm correctness.** Before any benchmark run, verify: seed genes exist in adata, representations produce valid output, priors sum to 1, model instantiates correctly, training step runs without error.
+
+## Codebase Safety
+
+1. **Never delete or overwrite existing source files.** If a file must change, make it recoverable (git branch, or backup).
+2. **Never corrupt the codebase.** When implementing a plan that modifies core code, create a new git branch first.
+3. **New files only for experiments.** Do not modify `seededntm/` package code unless the user explicitly asks for a core refactor AND experimental validation has completed.
+4. **Do not edit plan files.**
+
+## Lesson Learned (2025-05-25)
+
+A single conditional expression (`use_nb_obs=(dataset_name.startswith("visiumHD"))`) caused NPC and xenium_BC to use the wrong observation model (Multinomial instead of Negative Binomial). This went undetected through multiple "audits" and nearly went to publication. The consequences of submitting invalid results to a journal include retraction, career damage, and research misconduct investigation.
+
+**Root causes:**
+- Conditional logic for what should be a universal constant
+- "Audit" that checked parameter names but not actual code execution paths
+- Trusted conclusions drawn from unverified results
+- Per-dataset configuration that masked the inconsistency
+
+**Prevention:**
+- Canonical hyperparameter table (above) is the single source of truth
+- Startup assertions verify every parameter before training begins
+- No conditional hyperparameters — ever
+- Unit tests before experiments
+- Clean start every run — no salvaging old results
+
+## Lesson Learned (2025-05-26)
+
+Topic prior functions (`compute_topic_prior()` and `compute_topic_prior_idf()`) must index columns by `topic_index`, not by dict iteration order. Python dict order matches insertion order, which can differ from the `topic_index` field when seed JSON files have non-alphabetical key ordering. This caused silent column permutation in the prior matrix — the wrong prior was assigned to the wrong topic — producing subtly degraded results that passed all shape/sum checks.
+
+**Root causes:**
+- Iterating `for celltype, info in marker_genes.items()` and writing to column `i` (loop counter) instead of `info['topic_index']`
+- Assumption that dict order == topic order
+- No unit test that verified prior columns matched known topic assignments
+
+**Prevention:**
+- ALWAYS index by `info['topic_index']` when building per-topic matrices from seed dicts
+- Unit test: construct a seed dict with non-alphabetical keys, verify prior columns match topic_index
+- Never assume dict iteration order has semantic meaning for indexed arrays
