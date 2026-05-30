@@ -12,13 +12,17 @@ from typing import List, Optional
 
 import pandas as pd
 
-from seededntm.marker_agent.cache import find_local_file, get_cache_dir
+from seededntm.marker_agent.cache import cached_download, find_local_file, get_cache_dir
 from seededntm.marker_agent.schemas import MarkerHit
 
 logger = logging.getLogger(__name__)
 
 CELLMARKER_FILENAME = "Cell_marker_All.xlsx"
 CELLMARKER_HUMAN_FILENAME = "Cell_marker_Human.xlsx"
+CELLMARKER_URL = (
+    "http://bio-bigdata.hrbmu.edu.cn/CellMarker/"
+    "CellMarker_download_files/file/Cell_marker_All.xlsx"
+)
 
 
 class CellMarkerSource:
@@ -29,6 +33,28 @@ class CellMarkerSource:
         self._df: Optional[pd.DataFrame] = None
         self._filepath = filepath
 
+    def _ensure_data(self) -> Optional[Path]:
+        """Download CellMarker Excel if not already cached."""
+        for fname in [CELLMARKER_FILENAME, CELLMARKER_HUMAN_FILENAME]:
+            path = find_local_file(fname, cache_dir=self.cache_dir)
+            if path is not None:
+                return path
+
+        cache = get_cache_dir(self.cache_dir)
+        logger.info("Auto-downloading CellMarker from %s", CELLMARKER_URL)
+        try:
+            result = cached_download(
+                CELLMARKER_URL, CELLMARKER_FILENAME, cache_dir=self.cache_dir
+            )
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to auto-download CellMarker from %s: %s. "
+                "Download manually and place in %s",
+                CELLMARKER_URL, e, cache,
+            )
+            return None
+
     def _load(self) -> pd.DataFrame:
         if self._df is not None:
             return self._df
@@ -37,17 +63,9 @@ class CellMarkerSource:
         if self._filepath:
             path = Path(self._filepath)
         else:
-            for fname in [CELLMARKER_FILENAME, CELLMARKER_HUMAN_FILENAME]:
-                path = find_local_file(fname, cache_dir=self.cache_dir)
-                if path:
-                    break
+            path = self._ensure_data()
 
         if path is None:
-            logger.warning(
-                "CellMarker Excel not found locally. Place '%s' in cache dir: %s",
-                CELLMARKER_FILENAME,
-                get_cache_dir(self.cache_dir),
-            )
             self._df = pd.DataFrame()
             return self._df
 
@@ -76,25 +94,37 @@ class CellMarkerSource:
         species_col = next(
             (c for c in df.columns if "species" in c.lower()), None
         )
+        # Prefer 'cell_name' (actual cell identity) over 'cell_type' (broad category like "Normal cell")
         celltype_col = next(
-            (c for c in df.columns if "cell" in c.lower() and ("name" in c.lower() or "type" in c.lower())),
-            None,
+            (c for c in df.columns if c.lower() == "cell_name"), None
         )
+        if celltype_col is None:
+            celltype_col = next(
+                (c for c in df.columns if "cell" in c.lower() and ("name" in c.lower() or "type" in c.lower())),
+                None,
+            )
         tissue_col = next(
-            (c for c in df.columns if "tissue" in c.lower()), None
+            (c for c in df.columns if c.lower() == "tissue_type"), None
         )
+        if tissue_col is None:
+            tissue_col = next(
+                (c for c in df.columns if "tissue" in c.lower()), None
+            )
+        # Prefer 'Symbol' (standard gene symbol) over 'marker' (can be an alias)
         marker_col = next(
-            (c for c in df.columns if "marker" in c.lower() or "symbol" in c.lower() or "gene" in c.lower()),
-            None,
+            (c for c in df.columns if c.lower() == "symbol"), None
         )
+        if marker_col is None:
+            marker_col = next(
+                (c for c in df.columns if "marker" in c.lower() or "symbol" in c.lower() or "gene" in c.lower()),
+                None,
+            )
 
         if celltype_col is None or marker_col is None:
             logger.warning("CellMarker columns not recognized: %s", list(df.columns))
             return []
 
-        mask = df[celltype_col].astype(str).str.lower().str.contains(
-            cell_type.lower(), na=False
-        )
+        mask = self._flexible_cell_type_match(df, celltype_col, cell_type)
 
         if species_col:
             sp_mask = df[species_col].astype(str).str.lower().str.contains(
@@ -111,6 +141,12 @@ class CellMarkerSource:
                 mask = mask_with_tissue
 
         results = df[mask]
+
+        logger.debug(
+            "CellMarker: query cell_type='%s', tissue='%s', species='%s' -> %d rows matched",
+            cell_type, tissue, species, len(results),
+        )
+
         hits = []
 
         for _, row in results.iterrows():
@@ -138,3 +174,56 @@ class CellMarkerSource:
 
         logger.info("CellMarker: found %d markers for '%s'", len(hits), cell_type)
         return hits
+
+    @staticmethod
+    def _flexible_cell_type_match(
+        df: "pd.DataFrame", celltype_col: str, cell_type: str
+    ) -> "pd.Series":
+        """Match cell type flexibly: exact substring, singular/plural, and word stem.
+
+        Handles cases like:
+        - "T cells" matching "T cell", "CD4+ T cell", "Regulatory T cell"
+        - "Macrophage" matching "Macrophages", "M1 Macrophage"
+        """
+        import re
+
+        col_lower = df[celltype_col].astype(str).str.lower()
+        ct_lower = cell_type.lower().strip()
+
+        mask = col_lower.str.contains(re.escape(ct_lower), na=False)
+
+        if not mask.any():
+            candidates = []
+            if ct_lower.endswith("es"):
+                candidates.append(ct_lower[:-2])
+                candidates.append(ct_lower[:-1])
+            elif ct_lower.endswith("s"):
+                candidates.append(ct_lower[:-1])
+            for singular in candidates:
+                mask = col_lower.str.contains(re.escape(singular), na=False)
+                if mask.any():
+                    break
+
+        if not mask.any():
+            if not ct_lower.endswith("s"):
+                plural = ct_lower + "s"
+                mask = col_lower.str.contains(re.escape(plural), na=False)
+
+        if not mask.any():
+            words = ct_lower.split()
+            if len(words) >= 2:
+                pattern = ".*".join(re.escape(w.rstrip("s")) for w in words)
+                mask = col_lower.str.contains(pattern, na=False)
+
+        if not mask.any():
+            pass
+
+        if not mask.any():
+            logger.debug(
+                "CellMarker: no match for '%s' after flexible search. "
+                "Sample cell_name values: %s",
+                cell_type,
+                col_lower.dropna().unique()[:20].tolist(),
+            )
+
+        return mask

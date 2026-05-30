@@ -40,7 +40,7 @@ TIER1_SOURCES = {"CellMarker", "PanglaoDB", "ScTypeDB"}
 
 HIT_CAP_PER_SOURCE = 50
 
-CROSS_TYPE_THRESHOLD = 0.6
+CROSS_TYPE_THRESHOLD = 0.3
 
 CURATED_BONUS = 1.5
 
@@ -60,6 +60,7 @@ class ConsensusScorer:
         require_panel: bool = True,
         hit_cap: int = HIT_CAP_PER_SOURCE,
         cross_type_penalty: float = 0.5,
+        tissue_context: str = "",
     ):
         self.gene_panel = set(g.upper() for g in gene_panel)
         self.weights = weights if weights is not None else DEFAULT_WEIGHTS.copy()
@@ -67,6 +68,7 @@ class ConsensusScorer:
         self.require_panel = require_panel
         self.hit_cap = hit_cap
         self.cross_type_penalty = cross_type_penalty
+        self.tissue_context = tissue_context
 
     def score(
         self, hits: Dict[str, List[MarkerHit]]
@@ -190,6 +192,21 @@ class ConsensusScorer:
         scored_markers.sort(key=lambda m: m.total_score, reverse=True)
 
         top_markers = scored_markers[: self.top_n]
+
+        # Validate top candidates to remove false positives
+        if self.tissue_context:
+            from seededntm.marker_agent.llm_client import llm_validate_markers
+            candidates = [m.gene_symbol for m in top_markers[:30]]
+            if candidates:
+                try:
+                    validations = llm_validate_markers(candidates, cell_type, self.tissue_context)
+                    top_markers = [
+                        m for m in top_markers
+                        if validations.get(m.gene_symbol.upper(), "likely")
+                           not in ("unlikely", "housekeeping")
+                    ]
+                except Exception as e:
+                    logger.warning("LLM validation failed for %s: %s", cell_type, e)
 
         logger.info(
             "Scored %d markers for '%s' (panel-filtered: %d -> %d, top %d returned)",

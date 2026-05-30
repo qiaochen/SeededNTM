@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from seededntm.marker_agent.cache import find_local_file, get_cache_dir
+from seededntm.marker_agent.cache import cached_download, find_local_file, get_cache_dir
 from seededntm.marker_agent.schemas import MarkerHit
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,27 @@ class ScTypeDBSource:
         self._df: Optional[pd.DataFrame] = None
         self._filepath = filepath
 
+    def _ensure_data(self) -> Optional[Path]:
+        """Download ScTypeDB Excel if not already cached."""
+        path = find_local_file(SCTYPE_FILENAME, cache_dir=self.cache_dir)
+        if path is not None:
+            return path
+
+        cache = get_cache_dir(self.cache_dir)
+        logger.info("Auto-downloading ScTypeDB from %s", SCTYPE_URL)
+        try:
+            result = cached_download(
+                SCTYPE_URL, SCTYPE_FILENAME, cache_dir=self.cache_dir
+            )
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to auto-download ScTypeDB from %s: %s. "
+                "Download manually and place in %s",
+                SCTYPE_URL, e, cache,
+            )
+            return None
+
     def _load(self) -> pd.DataFrame:
         if self._df is not None:
             return self._df
@@ -40,14 +61,9 @@ class ScTypeDBSource:
         if self._filepath:
             path = Path(self._filepath)
         else:
-            path = find_local_file(SCTYPE_FILENAME, cache_dir=self.cache_dir)
+            path = self._ensure_data()
 
         if path is None:
-            logger.warning(
-                "ScTypeDB Excel not found locally. Place '%s' in cache dir: %s",
-                SCTYPE_FILENAME,
-                get_cache_dir(self.cache_dir),
-            )
             self._df = pd.DataFrame()
             return self._df
 
@@ -82,15 +98,15 @@ class ScTypeDBSource:
             (c for c in df.columns if "tissue" in c.lower()), None
         )
         celltype_col = next(
-            (c for c in df.columns if "cell" in c.lower() and "type" in c.lower()),
+            (c for c in df.columns if "cell" in c.lower() and ("type" in c.lower() or "name" in c.lower())),
             None,
         )
         pos_col = next(
-            (c for c in df.columns if "geneSymbolmore1" in c or "positive" in c.lower()),
+            (c for c in df.columns if "genesymbolmore1" in c.lower() or "positive" in c.lower()),
             None,
         )
         neg_col = next(
-            (c for c in df.columns if "geneSymbolmore2" in c or "negative" in c.lower()),
+            (c for c in df.columns if "genesymbolmore2" in c.lower() or "negative" in c.lower()),
             None,
         )
 

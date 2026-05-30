@@ -6,18 +6,21 @@ and specificity annotations. Data is loaded from a local TSV file.
 
 from __future__ import annotations
 
+import gzip
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
 
-from seededntm.marker_agent.cache import find_local_file, get_cache_dir
+from seededntm.marker_agent.cache import cached_download, find_local_file, get_cache_dir
 from seededntm.marker_agent.schemas import MarkerHit
 
 logger = logging.getLogger(__name__)
 
 PANGLAODB_FILENAME = "PanglaoDB_markers_27_Mar_2020.tsv"
+PANGLAODB_GZ_FILENAME = "PanglaoDB_markers_27_Mar_2020.tsv.gz"
 PANGLAODB_URL = "https://panglaodb.se/markers/PanglaoDB_markers_27_Mar_2020.tsv.gz"
 
 
@@ -29,6 +32,35 @@ class PanglaoDBSource:
         self._df: Optional[pd.DataFrame] = None
         self._filepath = filepath
 
+    def _ensure_data(self) -> Optional[Path]:
+        """Download PanglaoDB TSV if not already cached."""
+        path = find_local_file(PANGLAODB_FILENAME, cache_dir=self.cache_dir)
+        if path is not None:
+            return path
+
+        path = find_local_file(PANGLAODB_GZ_FILENAME, cache_dir=self.cache_dir)
+        if path is not None:
+            return path
+
+        cache = get_cache_dir(self.cache_dir)
+        tsv_path = cache / PANGLAODB_FILENAME
+        gz_path = cache / PANGLAODB_GZ_FILENAME
+
+        logger.info("Auto-downloading PanglaoDB from %s", PANGLAODB_URL)
+        try:
+            cached_download(PANGLAODB_URL, PANGLAODB_GZ_FILENAME, cache_dir=self.cache_dir)
+            with gzip.open(gz_path, "rb") as f_in, open(tsv_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            logger.info("PanglaoDB TSV decompressed to %s", tsv_path)
+            return tsv_path
+        except Exception as e:
+            logger.error(
+                "Failed to auto-download PanglaoDB from %s: %s. "
+                "Download manually and place in %s",
+                PANGLAODB_URL, e, cache,
+            )
+            return None
+
     def _load(self) -> pd.DataFrame:
         if self._df is not None:
             return self._df
@@ -37,17 +69,9 @@ class PanglaoDBSource:
         if self._filepath:
             path = Path(self._filepath)
         else:
-            path = find_local_file(PANGLAODB_FILENAME, cache_dir=self.cache_dir)
-            if path is None:
-                gz_name = PANGLAODB_FILENAME + ".gz"
-                path = find_local_file(gz_name, cache_dir=self.cache_dir)
+            path = self._ensure_data()
 
         if path is None:
-            logger.warning(
-                "PanglaoDB TSV not found locally. Place '%s' in cache dir: %s",
-                PANGLAODB_FILENAME,
-                get_cache_dir(self.cache_dir),
-            )
             self._df = pd.DataFrame()
             return self._df
 

@@ -14,7 +14,12 @@ def _load_env():
     """Load .env file if python-dotenv is available."""
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        from pathlib import Path
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+        else:
+            load_dotenv()
     except ImportError:
         pass
 
@@ -30,7 +35,7 @@ def get_llm_client():
     return AzureOpenAI(
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         azure_endpoint=base_url,
-        api_version="2025-04-01-preview",
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview"),
     )
 
 

@@ -291,6 +291,7 @@ class MarkerSearchAgent:
             gene_panel=self.context.gene_panel,
             top_n=self.context.n_markers_per_type,
             require_panel=bool(self.context.gene_panel),
+            tissue_context=self.context.tissue,
         )
         results = scorer.score(all_hits)
 

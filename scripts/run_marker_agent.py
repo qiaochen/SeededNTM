@@ -40,6 +40,10 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("AZURE_OPENAI_API_KEY", "978e40b462a14c53adb242077ca5d362")
+os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://rnd-artificialintelligenceopenai-dev.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview")
+os.environ.setdefault("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-2")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
@@ -205,6 +209,7 @@ def run_leiden_mode(args, gene_panel):
         sys.exit(1)
 
     tissue_desc = args.tissue_desc or args.tissue or "unspecified tissue"
+    expected_types = [t.strip() for t in args.expected_types.split(",") if t.strip()] if args.expected_types else []
 
     print(f"Loading h5ad: {args.h5ad}")
     adata = sc.read_h5ad(args.h5ad)
@@ -212,17 +217,17 @@ def run_leiden_mode(args, gene_panel):
     pipeline = SeedConstructionPipeline(
         adata=adata,
         tissue_description=tissue_desc,
+        expected_cell_types=expected_types,
         top_n_genes=args.n_markers,
+        species=args.species,
+        organ=args.organ,
+        condition=args.condition,
     )
 
     seeds = pipeline.run()
 
-    output_data = {}
-    for cell_type, info in seeds.items():
-        output_data[cell_type] = info["features"]
-
     with open(args.output, "w") as f:
-        json.dump(output_data, f, indent=2)
+        json.dump(seeds, f, indent=2)
 
     if not args.no_provenance:
         prov_path = _derive_provenance_path(args.output)

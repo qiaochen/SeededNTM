@@ -10,12 +10,18 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from seededntm.marker_agent.cache import find_local_file, get_cache_dir
+from seededntm.marker_agent.cache import cached_download, find_local_file, get_cache_dir
 from seededntm.marker_agent.schemas import MarkerHit
 
 logger = logging.getLogger(__name__)
 
+_GENERIC_WORDS = {"cell", "cells", "type", "types", "tissue", "human", "mouse", "marker", "markers"}
+
 MSIGDB_C8_FILENAME = "c8.all.v2023.2.Hs.symbols.gmt"
+MSIGDB_C8_URL = (
+    "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/"
+    "2023.2.Hs/c8.all.v2023.2.Hs.symbols.gmt"
+)
 
 
 class MSigDBSource:
@@ -26,6 +32,35 @@ class MSigDBSource:
         self._gene_sets: Optional[Dict[str, Set[str]]] = None
         self._filepath = filepath
 
+    def _ensure_data(self) -> Optional[Path]:
+        """Download MSigDB C8 GMT if not already cached."""
+        path = find_local_file(MSIGDB_C8_FILENAME, cache_dir=self.cache_dir)
+        if path is not None:
+            return path
+
+        for alt in [
+            "c8.all.v2024.1.Hs.symbols.gmt",
+            "c8.all.v7.5.1.symbols.gmt",
+        ]:
+            path = find_local_file(alt, cache_dir=self.cache_dir)
+            if path is not None:
+                return path
+
+        cache = get_cache_dir(self.cache_dir)
+        logger.info("Auto-downloading MSigDB C8 from %s", MSIGDB_C8_URL)
+        try:
+            result = cached_download(
+                MSIGDB_C8_URL, MSIGDB_C8_FILENAME, cache_dir=self.cache_dir
+            )
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to auto-download MSigDB C8 from %s: %s. "
+                "Download manually and place in %s",
+                MSIGDB_C8_URL, e, cache,
+            )
+            return None
+
     def _load(self) -> Dict[str, Set[str]]:
         if self._gene_sets is not None:
             return self._gene_sets
@@ -34,22 +69,9 @@ class MSigDBSource:
         if self._filepath:
             path = Path(self._filepath)
         else:
-            path = find_local_file(MSIGDB_C8_FILENAME, cache_dir=self.cache_dir)
-            if path is None:
-                for alt in [
-                    "c8.all.v2024.1.Hs.symbols.gmt",
-                    "c8.all.v7.5.1.symbols.gmt",
-                ]:
-                    path = find_local_file(alt, cache_dir=self.cache_dir)
-                    if path:
-                        break
+            path = self._ensure_data()
 
         if path is None:
-            logger.warning(
-                "MSigDB C8 GMT not found. Place '%s' in cache dir: %s",
-                MSIGDB_C8_FILENAME,
-                get_cache_dir(self.cache_dir),
-            )
             self._gene_sets = {}
             return self._gene_sets
 
@@ -92,7 +114,7 @@ class MSigDBSource:
                 matching_sets.append((set_name, genes, 1.0))
             elif all(part in name_lower for part in cell_type_parts):
                 matching_sets.append((set_name, genes, 0.8))
-            elif any(part in name_lower for part in cell_type_parts if len(part) > 3):
+            elif any(part in name_lower for part in cell_type_parts if len(part) > 4 and part not in _GENERIC_WORDS):
                 matching_sets.append((set_name, genes, 0.5))
 
         if tissue:

@@ -90,10 +90,25 @@ class LitVar2Source:
         return hits
 
     def _get_variant_publications(self, gene_name: str) -> int:
-        """Query LitVar2 for total variant-related publications for a gene."""
+        """Query LitVar2 for total variant-related publications for a gene.
+
+        Tries direct gene search first; on failure, attempts the autocomplete
+        endpoint to resolve the gene symbol before retrying.
+        """
+        count = self._query_gene_variants(gene_name)
+        if count > 0:
+            return count
+
+        resolved = self._try_autocomplete_gene(gene_name)
+        if resolved and resolved != gene_name:
+            return self._query_gene_variants(resolved)
+        return 0
+
+    def _query_gene_variants(self, gene_name: str) -> int:
+        """Low-level query to LitVar2 variant/search/gene endpoint."""
         try:
             url = f"{BASE_URL}/variant/search/gene/{gene_name}"
-            resp = self._session.get(url, timeout=20)
+            resp = self._session.get(url, timeout=10)
             resp.raise_for_status()
             data = resp.json()
 
@@ -115,3 +130,29 @@ class LitVar2Source:
         except (ValueError, KeyError) as e:
             logger.debug("LitVar2 parse error for %s: %s", gene_name, e)
             return 0
+
+    def _try_autocomplete_gene(self, gene_name: str) -> Optional[str]:
+        """Attempt to resolve a gene name via LitVar2 autocomplete endpoint."""
+        try:
+            url = f"{BASE_URL}/autocomplete/"
+            resp = self._session.get(
+                url, params={"query": gene_name}, timeout=8
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            suggestions = data if isinstance(data, list) else data.get("results", [])
+            for s in suggestions:
+                if isinstance(s, dict):
+                    name = s.get("name", "") or s.get("value", "")
+                    if name.upper() == gene_name.upper():
+                        return name
+            if suggestions:
+                first = suggestions[0]
+                if isinstance(first, dict):
+                    return first.get("name", "") or first.get("value", "")
+                elif isinstance(first, str):
+                    return first
+        except Exception as e:
+            logger.debug("LitVar2 autocomplete failed for %s: %s", gene_name, e)
+        return None
