@@ -14,7 +14,7 @@ SeedTopic reference-based and reference-free differ ONLY in seed derivation. Eve
 1. **Never run experiments from the IDE.** Only create scripts. The user launches them on the external compute node.
 2. **Never set `CUDA_VISIBLE_DEVICES` or any GPU environment variable.** Only use `cuda:0` or `.cuda()` in code.
 3. **Experiment scripts are standalone files** in `experiments/`. They must not require modifications to core `seededntm/` source code.
-4. **All 6 metrics must be reported:** AMI, ARI, F1, Precision, Recall, AUPRC (plus supplementary: Pearson, Spearman, RMSE, JSD).
+4. **All 6 metrics must be reported:** AMI, ARI, F1, Precision, Recall, AUPRC (plus supplementary: Pearson, Spearman, RMSE, JSD). **Primary reporting metrics** (for tables, summaries, and quick comparisons): **F1, AMI, AUPRC**.
 5. **Environment:** `micromamba activate seededntm` (for SeedTopic/STAMP) or `micromamba activate transpa` (for FlashDeconv/RCTD/MarkerScore).
 6. **Parallel processing:** Shell launchers should run up to 6 processes in parallel, interleaving datasets to avoid GPU memory contention.
 7. **Early stopping:** Only enable `early_stop=True` for xenium_BC. All other datasets must train for the full epoch count.
@@ -44,6 +44,25 @@ These are the ONLY correct values. Any deviation is a bug.
 | `k_neighbors` | `6` | For spatial smoothing (when applicable) |
 | `representation` | `idf_lev_seed_spec` | Ablation winner (avg rank #1) |
 | `prior_mode` | `standard` | Ablation winner |
+
+## Canonical Post-Hoc Blend Parameters (dslevel_entgate)
+
+When a scRNA-seq reference is available (ref-based, non-missing celltypes), the post-hoc
+NNLS blend with entropy gating is the default enhancement. Parameters below are immutable.
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `g1` | `20.0` | Stability sigmoid gain |
+| `t1` | `0.80` | Stability threshold |
+| `g2` | `10.0` | Max-prop sigmoid gain |
+| `t2` | `0.85` | Max-prop threshold |
+| `w_min` | `0.05` | Floor weight |
+| `w_max` | `0.95` | Ceiling weight |
+| `gamma_ent` | `5.0` | Entropy gate sharpness |
+| `H_thresh` | `0.5` | Entropy gate threshold (normalized entropy) |
+| NNLS smoothing k | `7` | Neighbors |
+| NNLS smoothing iterations | `3` | Diffusion steps |
+| NNLS smoothing alpha | `0.7` | Self-retention |
 
 ## No Conditional Hyperparameters
 
